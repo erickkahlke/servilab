@@ -5,6 +5,23 @@ const app = express();
 const persist = require("node-persist");
 require('dotenv').config();
 
+// Configuración de logging
+const logger = {
+  info: (message, ...args) => console.log(`[INFO] ${message}`, ...args),
+  error: (message, ...args) => console.error(`[ERROR] ${message}`, ...args),
+  warn: (message, ...args) => console.warn(`[WARN] ${message}`, ...args)
+};
+
+// Middleware para manejo de errores
+const errorHandler = (err, req, res, next) => {
+  logger.error('Error en la aplicación:', err);
+  res.status(500).json({
+    success: false,
+    message: 'Error interno del servidor',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+};
+
 // Middleware para parsear JSON
 app.use(express.json({ limit: "10mb" }));
 
@@ -27,6 +44,15 @@ app.use((req, res, next) => {
   await persist.init({ dir: ".data/polls" }); // podés cambiar el nombre si querés
   console.log("Almacenamiento persistente inicializado");
 })();
+
+// Configuración de WhatsApp API
+const whatsappConfig = {
+  baseURL: 'https://waapi.app/api/v1',
+  instanceId: process.env.WAAPI_INSTANCE_ID,
+  token: process.env.WAAPI_TOKEN,
+  maxRetries: 3,
+  retryDelay: 1000
+};
 
 // Función para normalizar el número de teléfono
 const normalizarTelefono = (telefono) => {
@@ -80,8 +106,8 @@ const normalizarTelefono = (telefono) => {
   return `+549${areaCode}${phoneNumber}`;
 };
 
-// Función para enviar mensajes a la API de WhatsApp
-const enviarMensajeWhatsApp = async (chatId, message) => {
+// Función mejorada para enviar mensajes a WhatsApp con reintentos
+const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0) => {
   const body = {
     message,
     chatId,
@@ -90,18 +116,32 @@ const enviarMensajeWhatsApp = async (chatId, message) => {
 
   try {
     const response = await axios.post(
-      `https://waapi.app/api/v1/instances/${process.env.WAAPI_INSTANCE_ID}/client/action/send-message`,
+      `${whatsappConfig.baseURL}/instances/${whatsappConfig.instanceId}/client/action/send-message`,
       body,
       {
         headers: {
-          Authorization: `Bearer ${process.env.WAAPI_TOKEN}`,
+          Authorization: `Bearer ${whatsappConfig.token}`,
           Host: "waapi.app",
           "Content-Type": "application/json",
         },
+        timeout: 5000 // 5 segundos de timeout
       }
     );
-    return response.data;
+    
+    if (response.data?.status === 'success') {
+      logger.info(`Mensaje enviado exitosamente a ${chatId}`);
+      return response.data;
+    } else {
+      throw new Error('Respuesta no exitosa de WhatsApp API');
+    }
   } catch (error) {
+    if (retryCount < whatsappConfig.maxRetries) {
+      logger.warn(`Reintentando envío de mensaje a ${chatId}. Intento ${retryCount + 1}/${whatsappConfig.maxRetries}`);
+      await new Promise(resolve => setTimeout(resolve, whatsappConfig.retryDelay));
+      return enviarMensajeWhatsApp(chatId, message, retryCount + 1);
+    }
+    
+    logger.error('Error al enviar mensaje de WhatsApp:', error.message);
     throw new Error(
       "Error al enviar el mensaje: " +
         (error.response ? error.response.data : error.message)
@@ -160,7 +200,7 @@ async function analizarEncuesta(vote) {
   await persist.setItem(llaveDone, true);
 
   // ── Agradecimiento al cliente ───────────────────────────────────
-  enviarMensajeWhatsApp(
+  await enviarMensajeWhatsApp(
     voter,
     "¡Gracias por tu opinión! Nos ayuda a mejorar 🙌"
   );
@@ -168,8 +208,52 @@ async function analizarEncuesta(vote) {
   console.log(`Voto procesado (${opcion}) para ID ${messageId}`);
 }
 
-// Endpoint para notificación de turno confirmado
-app.post("/notificacion/turno-confirmado", async (req, res) => {
+// Funciones de validación
+const validaciones = {
+  telefono: (tel) => {
+    if (!tel || typeof tel !== 'string') return false;
+    return tel.replace(/[^0-9]/g, '').length >= 8;
+  },
+  
+  fecha: (fecha) => {
+    if (!fecha) return false;
+    const date = new Date(fecha);
+    return date instanceof Date && !isNaN(date);
+  },
+  
+  hora: (hora) => {
+    if (!hora) return false;
+    return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(hora);
+  },
+  
+  nombre: (nombre) => {
+    if (!nombre || typeof nombre !== 'string') return false;
+    return nombre.length >= 2 && nombre.length <= 50;
+  }
+};
+
+// Middleware de validación para turno confirmado
+const validarTurnoConfirmado = (req, res, next) => {
+  const { telefono, customer_first_name, appointment_start_date, appointment_start_time } = req.body;
+  
+  if (!validaciones.telefono(telefono)) {
+    return res.status(400).json({ success: false, message: 'Teléfono inválido' });
+  }
+  if (!validaciones.nombre(customer_first_name)) {
+    return res.status(400).json({ success: false, message: 'Nombre inválido' });
+  }
+  if (!validaciones.fecha(appointment_start_date)) {
+    return res.status(400).json({ success: false, message: 'Fecha inválida' });
+  }
+  if (!validaciones.hora(appointment_start_time)) {
+    return res.status(400).json({ success: false, message: 'Hora inválida' });
+  }
+  
+  next();
+};
+
+// Endpoint para notificación de turno confirmado con validación
+app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, res) => {
   const {
     telefono,
     customer_first_name,
@@ -453,8 +537,11 @@ app.get("/debug/pendientes", async (req, res) => {
   res.json(pendientes);
 });
 
+// Agregar el middleware de manejo de errores al final
+app.use(errorHandler);
+
 // Puerto en el que corre el servidor
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`Servidor corriendo en el puerto ${port}`);
+  logger.info(`Servidor corriendo en el puerto ${port}`);
 });
