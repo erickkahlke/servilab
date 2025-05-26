@@ -8,23 +8,58 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Verificar secretos
+      run: |
+        if [ -z "${{ secrets.HOST }}" ]; then
+          echo "❌ Error: HOST no está configurado"
+          exit 1
+        fi
+        if [ -z "${{ secrets.SSH_USER }}" ]; then
+          echo "❌ Error: SSH_USER no está configurado"
+          exit 1
+        fi
+        if [ -z "${{ secrets.SSH_PORT }}" ]; then
+          echo "❌ Error: SSH_PORT no está configurado"
+          exit 1
+        fi
+        if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
+          echo "❌ Error: SSH_PRIVATE_KEY no está configurado"
+          exit 1
+        fi
+        echo "✅ Todos los secretos están configurados"
+
     - name: Configurar clave SSH
-      uses: webfactory/ssh-agent@v0.5.4
+      uses: webfactory/ssh-agent@v0.8.0
       with:
         ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
+    - name: Verificar conexión SSH
+      run: |
+        echo "🔍 Intentando conexión SSH..."
+        ssh -o StrictHostKeyChecking=no -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_USER }}@${{ secrets.HOST }} 'echo "✅ Conexión SSH exitosa"'
+
     - name: Desplegar por SSH
       run: |
-        ssh -o StrictHostKeyChecking=no -p ${{ secrets.SSH_PORT }} \
-            ${{ secrets.SSH_USER }}@${{ secrets.HOST }} << 'EOF'
+        echo "🚀 Iniciando despliegue..."
+        ssh -o StrictHostKeyChecking=no -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_USER }}@${{ secrets.HOST }} << 'EOF'
+          set -e
+          echo "📂 Cambiando al directorio del proyecto..."
           cd /var/www/html/servilab
+          
+          echo "⬇️ Actualizando código..."
           git fetch origin main
           git reset --hard origin/main
+          
+          echo "📦 Instalando dependencias..."
           npm ci --production
+          
+          echo "🔄 Reiniciando servicio..."
           pm2 reload servilab || pm2 start server.js --name servilab -- --port 3000
+          
+          echo "✅ Despliegue completado"
         EOF
