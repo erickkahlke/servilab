@@ -3,11 +3,10 @@ name: 🚀 Deploy a producción
 on:
   push:
     branches:
-      - main    # o el nombre que uses
+      - main
 
 jobs:
   deploy:
-    name: Desplegar en Servidor
     runs-on: ubuntu-latest
 
     steps:
@@ -15,7 +14,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Configurar clave SSH
-      uses: webfactory/ssh-agent@v0.8.1
+      uses: webfactory/ssh-agent@v0.5.4
       with:
         ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
@@ -24,8 +23,8 @@ jobs:
         ssh -o StrictHostKeyChecking=no -p ${{ secrets.SSH_PORT }} \
             ${{ secrets.SSH_USER }}@${{ secrets.HOST }} << 'EOF'
           cd /var/www/html/servilab
-          git fetch origin production
-          git reset --hard origin/production
+          git fetch origin main
+          git reset --hard origin/main
           npm ci --production
           pm2 reload servilab || pm2 start server.js --name servilab -- --port 3000
         EOF
