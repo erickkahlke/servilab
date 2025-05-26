@@ -537,6 +537,36 @@ app.get("/debug/pendientes", async (req, res) => {
   res.json(pendientes);
 });
 
+// Endpoint de prueba
+app.get("/test", (req, res) => {
+  const serverInfo = {
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    serverUptime: process.uptime(),
+    memoryUsage: process.memoryUsage(),
+    endpoints: {
+      notificaciones: [
+        "/notificacion/turno-confirmado",
+        "/notificacion/seguro-lluvia",
+        "/notificacion/pin-llaves",
+        "/notificacion/recordatorio",
+        "/notificacion/lavado-completado"
+      ],
+      encuestas: [
+        "/enviar-encuesta",
+        "/debug/pendientes"
+      ],
+      webhook: [
+        "/webhook/waapi"
+      ]
+    }
+  };
+
+  logger.info('Test endpoint called');
+  res.json(serverInfo);
+});
+
 // Agregar el middleware de manejo de errores al final
 app.use(errorHandler);
 
