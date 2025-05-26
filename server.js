@@ -5,6 +5,9 @@ const app = express();
 const persist = require("node-persist");
 require('dotenv').config();
 
+// Test de despliegue automático
+console.log('Servidor iniciado - Versión con despliegue automático');
+
 // Configuración de logging
 const logger = {
   info: (message, ...args) => console.log(`[INFO] ${message}`, ...args),
