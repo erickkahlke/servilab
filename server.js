@@ -12,6 +12,7 @@ const swaggerSpecs = require('./src/swagger');
 // Importar middlewares de seguridad
 const validateApiKeyMiddleware = require('./src/middleware/apiKey');
 const { generalLimiter, authLimiter } = require('./src/middleware/rateLimiter');
+const { PUBLIC_ENDPOINTS } = require('./src/config/keys');
 
 // Importar el generador de API keys
 const { generateApiKey, validateApiKey, getKeyType, registerApiKey, listApiKeys, deleteApiKey } = require('./src/utils/apiKeyGenerator');
@@ -51,7 +52,7 @@ app.get('/docs', swaggerUi.setup(swaggerSpecs, swaggerUiOptions));
 // Aplicar rate limiting general a todas las rutas excepto docs
 app.use(/^(?!\/docs).+/, generalLimiter);
 
-// Aplicar validación de API key a todas las rutas excepto docs y test
+// Aplicar validación de API key a todas las rutas excepto las públicas
 app.use((req, res, next) => {
   // Si la ruta está en PUBLIC_ENDPOINTS, permitir sin API key
   if (PUBLIC_ENDPOINTS.some(endpoint => {
