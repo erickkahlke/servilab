@@ -1,163 +1,123 @@
-const { v4: uuidv4 } = require('uuid');
-const CryptoJS = require('crypto-js');
-const { ROLES } = require('../config/permissions');
+const crypto = require('crypto');
 const persist = require('node-persist');
 
-// Inicializar node-persist
-(async () => {
-    await persist.init({
-        dir: '.data/apikeys',
-        stringify: JSON.stringify,
-        parse: JSON.parse,
-        encoding: 'utf8',
-        logging: false,
-        ttl: false
-    });
-})();
+// API key maestra que será válida en todos los ambientes y no puede ser revocada
+const MASTER_API_KEY = process.env.MASTER_API_KEY || 'sl_master_8f4c5a91-b6d2-4e8c-a252-1d7c3f5e9b8a_admin';
 
-// Prefijos válidos para las API keys
-const KEY_PREFIXES = {
-    LIVE: 'sl_live_',
-    TEST: 'sl_test_'
-};
-
-// Obtener el secreto del checksum desde variables de entorno
-const CHECKSUM_SECRET = process.env.API_KEY_SECRET || 'default-secret-do-not-use-in-production';
-
-// Verificar si estamos usando el secreto por defecto
-if (process.env.NODE_ENV === 'production' && CHECKSUM_SECRET === 'default-secret-do-not-use-in-production') {
-    console.error('⚠️  ADVERTENCIA: Usando secreto por defecto en producción. Esto es inseguro.');
-    console.error('   Configura la variable de entorno API_KEY_SECRET con un valor seguro.');
+// Validar que la master key tenga el formato correcto
+if (!MASTER_API_KEY.startsWith('sl_master_') || !MASTER_API_KEY.endsWith('_admin')) {
+  console.error('⚠️  ADVERTENCIA: El formato de MASTER_API_KEY no es válido');
+  process.exit(1);
 }
 
-/**
- * Genera una nueva API key
- * @param {boolean} isTest - Si es true, genera una key de prueba
- * @returns {string} API key generada
- */
-const generateApiKey = (isTest = false) => {
-    const prefix = isTest ? KEY_PREFIXES.TEST : KEY_PREFIXES.LIVE;
-    const uuid = uuidv4();
-    const baseKey = `${prefix}${uuid}`;
-    const checksum = generateChecksum(baseKey);
-    return `${baseKey}_${checksum}`;
+const generateApiKey = (isTest = false, name = '') => {
+  if (!name) {
+    throw new Error('El nombre es requerido para generar una API key');
+  }
+  
+  const uuid = crypto.randomUUID();
+  const prefix = isTest ? 'sl_test_' : 'sl_live_';
+  const suffix = crypto.randomBytes(3).toString('hex');
+  return `${prefix}${uuid}_${suffix}`;
 };
 
-/**
- * Registra una API key en el sistema
- * @param {string} apiKey - La API key a registrar
- * @param {boolean} isTest - Si es una key de prueba
- * @returns {Promise<Object>} Configuración de la key registrada
- */
-const registerApiKey = async (apiKey, isTest = false) => {
-    const keyConfig = {
-        name: isTest ? 'Testing API Key' : 'Production API Key',
-        role: 'notifications',
-        permissions: ROLES.notifications.permissions,
-        createdAt: new Date().toISOString(),
-        type: isTest ? 'test' : 'live'
-    };
-    
-    await persist.setItem(`apikey:${apiKey}`, keyConfig);
-    return keyConfig;
-};
+const validateApiKey = async (apiKey) => {
+  // La master key siempre es válida
+  if (apiKey === MASTER_API_KEY) {
+    return true;
+  }
 
-/**
- * Obtiene la configuración de una API key
- * @param {string} apiKey - La API key a buscar
- * @returns {Promise<Object|null>} Configuración de la key o null si no existe
- */
-const getApiKeyConfig = async (apiKey) => {
-    return await persist.getItem(`apikey:${apiKey}`);
-};
-
-/**
- * Lista todas las API keys registradas
- * @returns {Promise<Object>} Objeto con todas las API keys y sus configuraciones
- */
-const listApiKeys = async () => {
-    const keys = await persist.keys();
-    const apiKeys = {};
-    
-    for (const key of keys) {
-        if (key.startsWith('apikey:')) {
-            const apiKey = key.replace('apikey:', '');
-            apiKeys[apiKey] = await persist.getItem(key);
-        }
-    }
-    
-    return apiKeys;
-};
-
-/**
- * Elimina una API key del sistema
- * @param {string} apiKey - La API key a eliminar
- * @returns {Promise<boolean>} true si se eliminó correctamente
- */
-const deleteApiKey = async (apiKey) => {
-    const exists = await persist.getItem(`apikey:${apiKey}`);
-    if (exists) {
-        await persist.removeItem(`apikey:${apiKey}`);
-        return true;
-    }
+  // Validar formato
+  if (!apiKey || typeof apiKey !== 'string') {
     return false;
+  }
+
+  const pattern = /^sl_(live|test)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}_[0-9a-f]{6}$/;
+  if (!pattern.test(apiKey)) {
+    return false;
+  }
+
+  // Verificar si existe en el registro
+  const keys = await listApiKeys();
+  return !!keys[apiKey];
 };
 
-/**
- * Genera el checksum para una API key
- * @param {string} baseKey - La key base sin el checksum
- * @returns {string} Checksum generado
- */
-const generateChecksum = (baseKey) => {
-    const hash = CryptoJS.HmacSHA256(baseKey, CHECKSUM_SECRET);
-    return hash.toString(CryptoJS.enc.Hex).substring(0, 6);
+const isMasterKey = (apiKey) => {
+  return apiKey === MASTER_API_KEY;
 };
 
-/**
- * Valida una API key
- * @param {string} apiKey - La API key completa a validar
- * @returns {boolean} true si la key es válida
- */
-const validateApiKey = (apiKey) => {
-    // Verificar formato básico
-    const parts = apiKey.split('_');
-    if (parts.length !== 3) return false;
-
-    // Verificar prefijo
-    const prefix = `${parts[0]}_${parts[1]}_`;
-    if (!Object.values(KEY_PREFIXES).includes(prefix)) return false;
-
-    // Verificar UUID
-    const uuid = parts[1];
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(uuid)) return false;
-
-    // Verificar checksum
-    const baseKey = apiKey.substring(0, apiKey.lastIndexOf('_'));
-    const providedChecksum = parts[2];
-    const calculatedChecksum = generateChecksum(baseKey);
-
-    return providedChecksum === calculatedChecksum;
-};
-
-/**
- * Obtiene el tipo de API key (live o test)
- * @param {string} apiKey - La API key a analizar
- * @returns {string} 'live' o 'test'
- */
 const getKeyType = (apiKey) => {
-    if (apiKey.startsWith(KEY_PREFIXES.LIVE)) return 'live';
-    if (apiKey.startsWith(KEY_PREFIXES.TEST)) return 'test';
-    return null;
+  if (apiKey === MASTER_API_KEY) return 'master';
+  if (apiKey.startsWith('sl_test_')) return 'test';
+  if (apiKey.startsWith('sl_live_')) return 'live';
+  return 'unknown';
+};
+
+const registerApiKey = async (apiKey, name, isTest = false) => {
+  if (!name) {
+    throw new Error('El nombre es requerido para registrar una API key');
+  }
+
+  await persist.init({ dir: '.data/api-keys' });
+  
+  const config = {
+    name,
+    type: getKeyType(apiKey),
+    role: 'notifications',
+    permissions: ['notifications:send'],
+    createdAt: new Date().toISOString()
+  };
+
+  await persist.setItem(apiKey, config);
+  return config;
+};
+
+const listApiKeys = async () => {
+  await persist.init({ dir: '.data/api-keys' });
+  const keys = await persist.keys();
+  const result = {};
+
+  // Agregar la master key al listado
+  result[MASTER_API_KEY] = {
+    name: 'Master API Key',
+    type: 'master',
+    role: 'admin',
+    permissions: ['*'],
+    createdAt: '2024-01-01T00:00:00.000Z'
+  };
+
+  // Agregar el resto de las keys
+  for (const key of keys) {
+    result[key] = await persist.getItem(key);
+  }
+
+  return result;
+};
+
+const deleteApiKey = async (apiKey) => {
+  // No permitir eliminar la master key
+  if (apiKey === MASTER_API_KEY) {
+    throw new Error('La API key maestra no puede ser eliminada');
+  }
+
+  await persist.init({ dir: '.data/api-keys' });
+  const exists = await persist.getItem(apiKey);
+  
+  if (!exists) {
+    return false;
+  }
+
+  await persist.removeItem(apiKey);
+  return true;
 };
 
 module.exports = {
-    generateApiKey,
-    validateApiKey,
-    getKeyType,
-    KEY_PREFIXES,
-    registerApiKey,
-    getApiKeyConfig,
-    listApiKeys,
-    deleteApiKey
+  generateApiKey,
+  validateApiKey,
+  isMasterKey,
+  getKeyType,
+  registerApiKey,
+  listApiKeys,
+  deleteApiKey,
+  MASTER_API_KEY
 }; 

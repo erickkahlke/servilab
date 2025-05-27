@@ -51,8 +51,8 @@ app.get('/docs', swaggerUi.setup(swaggerSpecs, swaggerUiOptions));
 // Aplicar rate limiting general a todas las rutas excepto docs
 app.use(/^(?!\/docs).+/, generalLimiter);
 
-// Aplicar validación de API key a todas las rutas excepto docs, test y dev (en desarrollo)
-app.use(/^(?!\/docs|\/test$|\/dev\/).+/, validateApiKeyMiddleware);
+// Aplicar validación de API key a todas las rutas excepto docs y test
+app.use(/^(?!\/docs|\/test$).+/, validateApiKeyMiddleware);
 
 // Middleware para permitir solicitudes desde cualquier origen (CORS)
 app.use((req, res, next) => {
@@ -941,140 +941,100 @@ if (process.env.NODE_ENV === 'production') {
     }
 }
 
-// Endpoint para generar API keys (solo en desarrollo)
-if (process.env.NODE_ENV !== 'production') {
-    app.get('/dev/generate-key', async (req, res) => {
-        try {
-            const isTest = req.query.test === 'true';
-            const apiKey = generateApiKey(isTest);
-            const keyConfig = await registerApiKey(apiKey, isTest);
-            
-            res.json({
-                apiKey,
-                type: getKeyType(apiKey),
-                isValid: validateApiKey(apiKey),
-                config: keyConfig
-            });
-        } catch (error) {
-            console.error('Error generando API key:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Error generando API key'
-            });
-        }
-    });
-
-    // Endpoint temporal para listar API keys
-    app.get('/dev/list-keys', async (req, res) => {
-        try {
-            const keys = await listApiKeys();
-            res.json(keys);
-        } catch (error) {
-            console.error('Error listando API keys:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Error listando API keys'
-            });
-        }
-    });
-
-    // Endpoint para eliminar API keys
-    app.delete('/dev/delete-key/:apiKey', async (req, res) => {
-        try {
-            const { apiKey } = req.params;
-            const deleted = await deleteApiKey(apiKey);
-            
-            if (deleted) {
-                res.json({
-                    success: true,
-                    message: 'API key eliminada exitosamente'
-                });
-            } else {
-                res.status(404).json({
-                    success: false,
-                    message: 'API key no encontrada'
-                });
-            }
-        } catch (error) {
-            console.error('Error eliminando API key:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Error eliminando API key'
-            });
-        }
-    });
-}
-
 /**
  * @swagger
  * /dev/generate-key:
- *   get:
+ *   post:
  *     summary: Genera una nueva API key
- *     tags: [Debug]
- *     parameters:
- *       - in: query
- *         name: test
- *         schema:
- *           type: boolean
- *         description: Si es true, genera una key de prueba
+ *     description: Requiere API key maestra para acceder
+ *     tags: [API Keys]
+ *     security:
+ *       - MasterKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Nombre descriptivo para la API key
+ *                 example: "API Key para Sistema de Turnos"
+ *               test:
+ *                 type: boolean
+ *                 description: Si es true, genera una key de prueba
+ *                 default: false
  *     responses:
  *       200:
  *         description: API key generada exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 apiKey:
- *                   type: string
- *                   example: 'sl_test_5260b49b-16be-4a54-901c-6da3fc8424df_277dbc'
- *                 type:
- *                   type: string
- *                   example: 'test'
- *                 isValid:
- *                   type: boolean
- *                   example: true
- *                 config:
- *                   type: object
- *                   properties:
- *                     name:
- *                       type: string
- *                     role:
- *                       type: string
- *                     permissions:
- *                       type: array
  */
+app.post('/dev/generate-key', async (req, res) => {
+  try {
+    const { name, test = false } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre es requerido'
+      });
+    }
+
+    const apiKey = generateApiKey(test, name);
+    const keyConfig = await registerApiKey(apiKey, name, test);
+    
+    res.json({
+      apiKey,
+      type: getKeyType(apiKey),
+      isValid: await validateApiKey(apiKey),
+      config: keyConfig
+    });
+  } catch (error) {
+    console.error('Error generando API key:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando API key'
+    });
+  }
+});
 
 /**
  * @swagger
  * /dev/list-keys:
  *   get:
  *     summary: Lista todas las API keys registradas
- *     tags: [Debug]
+ *     description: Requiere API key maestra para acceder
+ *     tags: [API Keys]
+ *     security:
+ *       - MasterKeyAuth: []
  *     responses:
  *       200:
  *         description: Lista de API keys
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               additionalProperties:
- *                 type: object
- *                 properties:
- *                   name:
- *                     type: string
- *                   role:
- *                     type: string
- *                   permissions:
- *                     type: array
  */
+app.get('/dev/list-keys', async (req, res) => {
+  try {
+    const keys = await listApiKeys();
+    res.json(keys);
+  } catch (error) {
+    console.error('Error listando API keys:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando API keys'
+    });
+  }
+});
 
 /**
  * @swagger
  * /dev/delete-key/{apiKey}:
  *   delete:
  *     summary: Elimina una API key
- *     tags: [Debug]
+ *     description: Requiere API key maestra para acceder. La API key maestra no puede ser eliminada.
+ *     tags: [API Keys]
+ *     security:
+ *       - MasterKeyAuth: []
  *     parameters:
  *       - in: path
  *         name: apiKey
@@ -1085,17 +1045,40 @@ if (process.env.NODE_ENV !== 'production') {
  *     responses:
  *       200:
  *         description: API key eliminada exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Success'
  *       404:
  *         description: API key no encontrada
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
  */
+app.delete('/dev/delete-key/:apiKey', async (req, res) => {
+  try {
+    const { apiKey } = req.params;
+    const deleted = await deleteApiKey(apiKey);
+    
+    if (deleted) {
+      res.json({
+        success: true,
+        message: 'API key eliminada exitosamente'
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: 'API key no encontrada'
+      });
+    }
+  } catch (error) {
+    if (error.message === 'La API key maestra no puede ser eliminada') {
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    console.error('Error eliminando API key:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando API key'
+    });
+  }
+});
 
 /**
  * @swagger

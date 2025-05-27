@@ -7,58 +7,16 @@ const options = {
     info: {
       title: 'ServiLab API',
       version: '1.0.0',
-      description: 'API de notificaciones y encuestas para ServiLab Car Wash',
-      contact: {
-        name: 'Erick Kahlke',
-        url: 'https://github.com/erickkahlke',
-      },
+      description: 'API de notificaciones y encuestas para ServiLab Car Wash'
     },
     servers: [
       {
-        url: 'http://localhost:3000',
-        description: 'Servidor de desarrollo',
-      },
-      {
-        url: 'http://149.50.139.142/servilab',
-        description: 'Servidor de producción',
-      },
+        url: '/',
+        description: 'API Server'
+      }
     ],
     components: {
-      securitySchemes: {
-        ApiKeyAuth: {
-          type: 'apiKey',
-          in: 'header',
-          name: 'X-API-Key',
-          description: 'API key para autenticación',
-        },
-      },
       schemas: {
-        Error: {
-          type: 'object',
-          properties: {
-            success: {
-              type: 'boolean',
-              example: false,
-            },
-            message: {
-              type: 'string',
-              example: 'Descripción del error',
-            },
-          },
-        },
-        Success: {
-          type: 'object',
-          properties: {
-            success: {
-              type: 'boolean',
-              example: true,
-            },
-            message: {
-              type: 'string',
-              example: 'Operación exitosa',
-            },
-          },
-        },
         TurnoConfirmado: {
           type: 'object',
           required: ['telefono', 'customer_first_name', 'appointment_start_date', 'appointment_start_time'],
@@ -66,25 +24,25 @@ const options = {
             telefono: {
               type: 'string',
               example: '1135784301',
-              description: 'Número de teléfono sin prefijo internacional',
+              description: 'Número de teléfono sin prefijo internacional'
             },
             customer_first_name: {
               type: 'string',
               example: 'Erick',
-              description: 'Nombre del cliente',
+              description: 'Nombre del cliente'
             },
             appointment_start_date: {
               type: 'string',
               format: 'date',
-              example: '2024-10-10',
-              description: 'Fecha del turno (YYYY-MM-DD)',
+              example: '2024-03-27',
+              description: 'Fecha del turno (YYYY-MM-DD)'
             },
             appointment_start_time: {
               type: 'string',
               example: '15:30',
-              description: 'Hora del turno (HH:mm)',
-            },
-          },
+              description: 'Hora del turno (HH:mm)'
+            }
+          }
         },
         SeguroLluvia: {
           type: 'object',
@@ -93,21 +51,25 @@ const options = {
             telefono: {
               type: 'string',
               example: '1135784301',
+              description: 'Número de teléfono sin prefijo internacional'
             },
             customer_first_name: {
               type: 'string',
               example: 'Erick',
+              description: 'Nombre del cliente'
             },
             cupon: {
               type: 'string',
               example: 'LLUVIA123',
+              description: 'Código del cupón para el seguro de lluvia'
             },
             fechaValidoHasta: {
               type: 'string',
               format: 'date',
-              example: '2024-05-30',
-            },
-          },
+              example: '2024-03-30',
+              description: 'Fecha de vencimiento del cupón (YYYY-MM-DD)'
+            }
+          }
         },
         PinLlaves: {
           type: 'object',
@@ -116,53 +78,87 @@ const options = {
             telefono: {
               type: 'string',
               example: '1135784301',
+              description: 'Número de teléfono sin prefijo internacional'
             },
             customer_first_name: {
               type: 'string',
               example: 'Erick',
+              description: 'Nombre del cliente'
             },
             codigo: {
               type: 'string',
               example: '1234',
-            },
-          },
+              description: 'Código PIN para retirar las llaves'
+            }
+          }
         },
         Encuesta: {
           type: 'object',
-          required: ['telefono', 'customer_first_name', 'lavado', 'appointment_start_date', 'appointment_start_time'],
+          required: ['telefono', 'nombre', 'lavado', 'appointment_start_date', 'appointment_start_time'],
           properties: {
             telefono: {
               type: 'string',
               example: '1135784301',
+              description: 'Número de teléfono sin prefijo internacional'
             },
-            customer_first_name: {
+            nombre: {
               type: 'string',
               example: 'Erick',
+              description: 'Nombre del cliente'
+            },
+            apellido: {
+              type: 'string',
+              example: 'Kahlke',
+              description: 'Apellido del cliente (opcional)'
             },
             lavado: {
               type: 'string',
               example: 'Lavado Premium',
+              description: 'Tipo de lavado realizado'
             },
             appointment_start_date: {
               type: 'string',
               format: 'date',
-              example: '2024-10-10',
+              example: '2024-03-27',
+              description: 'Fecha del turno (YYYY-MM-DD)'
             },
             appointment_start_time: {
               type: 'string',
               example: '15:30',
-            },
-          },
+              description: 'Hora del turno (HH:mm)'
+            }
+          }
         },
-      },
-    },
-    security: [
-      {
-        ApiKeyAuth: [],
-      },
-    ],
+        Error: {
+          type: 'object',
+          properties: {
+            success: {
+              type: 'boolean',
+              example: false
+            },
+            message: {
+              type: 'string',
+              example: 'Descripción del error'
+            }
+          }
+        },
+        Success: {
+          type: 'object',
+          properties: {
+            success: {
+              type: 'boolean',
+              example: true
+            },
+            message: {
+              type: 'string',
+              example: 'Operación exitosa'
+            }
+          }
+        }
+      }
+    }
   },
-  apis: [path.join(__dirname, '../server.js')], // Ruta absoluta al archivo server.js
+  apis: ['./server.js']
 };
 
 const specs = swaggerJsdoc(options);
