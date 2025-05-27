@@ -26,3 +26,7 @@ yarn-error.log*
 .Trashes
 ehthumbs.db
 Thumbs.db 
+
+# Data directory (API keys y otros datos persistentes)
+.data/
+.data/* 

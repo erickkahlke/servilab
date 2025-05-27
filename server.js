@@ -5,6 +5,13 @@ const app = express();
 const persist = require("node-persist");
 require('dotenv').config();
 
+// Importar middlewares de seguridad
+const validateApiKeyMiddleware = require('./src/middleware/apiKey');
+const { generalLimiter, authLimiter } = require('./src/middleware/rateLimiter');
+
+// Importar el generador de API keys
+const { generateApiKey, validateApiKey, getKeyType, registerApiKey, listApiKeys, deleteApiKey } = require('./src/utils/apiKeyGenerator');
+
 // Test de despliegue automático
 console.log('Servidor iniciado - Versión con despliegue automático');
 
@@ -27,6 +34,12 @@ const errorHandler = (err, req, res, next) => {
 
 // Middleware para parsear JSON
 app.use(express.json({ limit: "10mb" }));
+
+// Aplicar rate limiting general a todas las rutas
+app.use(generalLimiter);
+
+// Aplicar validación de API key a todas las rutas
+app.use(validateApiKeyMiddleware);
 
 // Middleware para permitir solicitudes desde cualquier origen (CORS)
 app.use((req, res, next) => {
@@ -569,6 +582,90 @@ app.get("/test", (req, res) => {
   logger.info('Test endpoint called');
   res.json(serverInfo);
 });
+
+// Validaciones de seguridad en producción
+if (process.env.NODE_ENV === 'production') {
+    // Verificar secretos requeridos
+    const requiredSecrets = [
+        'API_KEY_SECRET',
+        'WHATSAPP_WEBHOOK_KEY',
+        'NOTIFICATIONS_KEY',
+        'WAAPI_INSTANCE_ID',
+        'WAAPI_TOKEN'
+    ];
+
+    const missingSecrets = requiredSecrets.filter(secret => !process.env[secret]);
+    
+    if (missingSecrets.length > 0) {
+        console.error('❌ Error: Faltan las siguientes variables de entorno requeridas:');
+        missingSecrets.forEach(secret => console.error(`   - ${secret}`));
+        process.exit(1);
+    }
+}
+
+// Endpoint para generar API keys (solo en desarrollo)
+if (process.env.NODE_ENV !== 'production') {
+    app.get('/dev/generate-key', async (req, res) => {
+        try {
+            const isTest = req.query.test === 'true';
+            const apiKey = generateApiKey(isTest);
+            const keyConfig = await registerApiKey(apiKey, isTest);
+            
+            res.json({
+                apiKey,
+                type: getKeyType(apiKey),
+                isValid: validateApiKey(apiKey),
+                config: keyConfig
+            });
+        } catch (error) {
+            console.error('Error generando API key:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generando API key'
+            });
+        }
+    });
+
+    // Endpoint temporal para listar API keys
+    app.get('/dev/list-keys', async (req, res) => {
+        try {
+            const keys = await listApiKeys();
+            res.json(keys);
+        } catch (error) {
+            console.error('Error listando API keys:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error listando API keys'
+            });
+        }
+    });
+
+    // Endpoint para eliminar API keys
+    app.delete('/dev/delete-key/:apiKey', async (req, res) => {
+        try {
+            const { apiKey } = req.params;
+            const deleted = await deleteApiKey(apiKey);
+            
+            if (deleted) {
+                res.json({
+                    success: true,
+                    message: 'API key eliminada exitosamente'
+                });
+            } else {
+                res.status(404).json({
+                    success: false,
+                    message: 'API key no encontrada'
+                });
+            }
+        } catch (error) {
+            console.error('Error eliminando API key:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error eliminando API key'
+            });
+        }
+    });
+}
 
 // Agregar el middleware de manejo de errores al final
 app.use(errorHandler);
