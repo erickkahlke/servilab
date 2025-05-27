@@ -1,4 +1,5 @@
 const swaggerJsdoc = require('swagger-jsdoc');
+const path = require('path');
 
 const options = {
   definition: {
@@ -161,7 +162,7 @@ const options = {
       },
     ],
   },
-  apis: ['./src/server.js'], // archivos a escanear para documentación
+  apis: [path.join(__dirname, '../server.js')], // Ruta absoluta al archivo server.js
 };
 
 const specs = swaggerJsdoc(options);

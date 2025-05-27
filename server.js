@@ -273,7 +273,20 @@ const validarTurnoConfirmado = (req, res, next) => {
 };
 
 // Configurar Swagger UI
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs));
+const swaggerUiOptions = {
+  explorer: true,
+  swaggerOptions: {
+    url: '/docs/swagger.json',
+  },
+  baseUrl: process.env.NODE_ENV === 'production' ? '/servilab' : ''
+};
+
+app.use('/docs', swaggerUi.serve);
+app.get('/docs', swaggerUi.setup(swaggerSpecs, swaggerUiOptions));
+app.get('/docs/swagger.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpecs);
+});
 
 /**
  * @swagger
