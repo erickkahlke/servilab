@@ -5,6 +5,10 @@ const app = express();
 const persist = require("node-persist");
 require('dotenv').config();
 
+// Importar Swagger
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpecs = require('./src/swagger');
+
 // Importar middlewares de seguridad
 const validateApiKeyMiddleware = require('./src/middleware/apiKey');
 const { generalLimiter, authLimiter } = require('./src/middleware/rateLimiter');
@@ -268,7 +272,41 @@ const validarTurnoConfirmado = (req, res, next) => {
   next();
 };
 
-// Endpoint para notificación de turno confirmado con validación
+// Configurar Swagger UI
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs));
+
+/**
+ * @swagger
+ * /notificacion/turno-confirmado:
+ *   post:
+ *     summary: Envía una notificación de turno confirmado vía WhatsApp
+ *     tags: [Notificaciones]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/TurnoConfirmado'
+ *     responses:
+ *       200:
+ *         description: Mensaje enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: API key inválida
+ *       500:
+ *         description: Error del servidor
+ */
 app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, res) => {
   const {
     telefono,
@@ -304,6 +342,38 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
   }
 });
 
+/**
+ * @swagger
+ * /notificacion/seguro-lluvia:
+ *   post:
+ *     summary: Envía una notificación de seguro de lluvia vía WhatsApp
+ *     tags: [Notificaciones]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/SeguroLluvia'
+ *     responses:
+ *       200:
+ *         description: Mensaje enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: API key inválida
+ *       500:
+ *         description: Error del servidor
+ */
 app.post("/notificacion/seguro-lluvia", async (req, res) => {
   const { telefono, customer_first_name, cupon, fechaValidoHasta } = req.body;
 
@@ -335,6 +405,38 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /notificacion/pin-llaves:
+ *   post:
+ *     summary: Envía una notificación con el PIN de llaves vía WhatsApp
+ *     tags: [Notificaciones]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/PinLlaves'
+ *     responses:
+ *       200:
+ *         description: Mensaje enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: API key inválida
+ *       500:
+ *         description: Error del servidor
+ */
 app.post("/notificacion/pin-llaves", async (req, res) => {
   const { telefono, customer_first_name, codigo } = req.body;
 
@@ -430,7 +532,38 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
   }
 });
 
-// Endpoint para enviar la encuesta post-lavado
+/**
+ * @swagger
+ * /enviar-encuesta:
+ *   post:
+ *     summary: Envía una encuesta de satisfacción vía WhatsApp
+ *     tags: [Encuestas]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Encuesta'
+ *     responses:
+ *       200:
+ *         description: Encuesta enviada exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: API key inválida
+ *       500:
+ *         description: Error del servidor
+ */
 app.post("/enviar-encuesta", async (req, res) => {
   const {
     telefono,
