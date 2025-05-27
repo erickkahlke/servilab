@@ -52,7 +52,23 @@ app.get('/docs', swaggerUi.setup(swaggerSpecs, swaggerUiOptions));
 app.use(/^(?!\/docs).+/, generalLimiter);
 
 // Aplicar validación de API key a todas las rutas excepto docs y test
-app.use(/^(?!\/docs|\/test$).+/, validateApiKeyMiddleware);
+app.use((req, res, next) => {
+  // Si la ruta está en PUBLIC_ENDPOINTS, permitir sin API key
+  if (PUBLIC_ENDPOINTS.some(endpoint => {
+    // Convertir el endpoint a regex si contiene *
+    if (endpoint.includes('*')) {
+      const regexStr = endpoint.replace('*', '.*');
+      const regex = new RegExp(`^${regexStr}$`);
+      return regex.test(req.path);
+    }
+    return endpoint === req.path;
+  })) {
+    return next();
+  }
+  
+  // Si no es pública, aplicar validación de API key
+  return validateApiKeyMiddleware(req, res, next);
+});
 
 // Middleware para permitir solicitudes desde cualquier origen (CORS)
 app.use((req, res, next) => {
