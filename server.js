@@ -39,11 +39,20 @@ const errorHandler = (err, req, res, next) => {
 // Middleware para parsear JSON
 app.use(express.json({ limit: "10mb" }));
 
-// Aplicar rate limiting general a todas las rutas
-app.use(generalLimiter);
+// Configurar Swagger UI
+const swaggerUiOptions = {
+  explorer: true,
+  customCss: '.swagger-ui .topbar { display: none }'
+};
 
-// Aplicar validación de API key a todas las rutas
-app.use(validateApiKeyMiddleware);
+app.use('/docs', swaggerUi.serve);
+app.get('/docs', swaggerUi.setup(swaggerSpecs, swaggerUiOptions));
+
+// Aplicar rate limiting general a todas las rutas excepto docs
+app.use(/^(?!\/docs).+/, generalLimiter);
+
+// Aplicar validación de API key a todas las rutas excepto docs, test y dev (en desarrollo)
+app.use(/^(?!\/docs|\/test$|\/dev\/).+/, validateApiKeyMiddleware);
 
 // Middleware para permitir solicitudes desde cualquier origen (CORS)
 app.use((req, res, next) => {
@@ -272,20 +281,102 @@ const validarTurnoConfirmado = (req, res, next) => {
   next();
 };
 
-// Configurar Swagger UI
-const swaggerUiOptions = {
-  explorer: true,
-  swaggerOptions: {
-    url: '/docs/swagger.json',
-  },
-  baseUrl: process.env.NODE_ENV === 'production' ? '/servilab' : ''
-};
+/**
+ * @swagger
+ * tags:
+ *   - name: Notificaciones
+ *     description: Endpoints para envío de notificaciones vía WhatsApp
+ *   - name: Encuestas
+ *     description: Endpoints para gestión de encuestas
+ *   - name: Webhooks
+ *     description: Endpoints para recibir eventos y callbacks
+ *   - name: Debug
+ *     description: Endpoints de desarrollo y depuración
+ */
 
-app.use('/docs', swaggerUi.serve);
-app.get('/docs', swaggerUi.setup(swaggerSpecs, swaggerUiOptions));
-app.get('/docs/swagger.json', (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.send(swaggerSpecs);
+/**
+ * @swagger
+ * /test:
+ *   get:
+ *     summary: Test endpoint que devuelve información del estado del servidor
+ *     description: Retorna información detallada sobre el estado del servidor, incluyendo uptime, uso de memoria y endpoints disponibles
+ *     tags: [Debug]
+ *     responses:
+ *       200:
+ *         description: Estado del servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "ok"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                   example: "2024-04-15T14:30:00.000Z"
+ *                 environment:
+ *                   type: string
+ *                   example: "production"
+ *                 serverUptime:
+ *                   type: number
+ *                   example: 6014.39665291
+ *                 memoryUsage:
+ *                   type: object
+ *                   properties:
+ *                     rss:
+ *                       type: number
+ *                     heapTotal:
+ *                       type: number
+ *                     heapUsed:
+ *                       type: number
+ *                     external:
+ *                       type: number
+ *                     arrayBuffers:
+ *                       type: number
+ *                 endpoints:
+ *                   type: object
+ *                   properties:
+ *                     notificaciones:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *                     encuestas:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *                     webhook:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ */
+app.get("/test", (req, res) => {
+  const endpoints = {
+    notificaciones: [
+      "/notificacion/turno-confirmado",
+      "/notificacion/seguro-lluvia",
+      "/notificacion/pin-llaves",
+      "/notificacion/recordatorio",
+      "/notificacion/lavado-completado"
+    ],
+    encuestas: [
+      "/enviar-encuesta",
+      "/debug/pendientes"
+    ],
+    webhook: [
+      "/webhook/waapi"
+    ]
+  };
+
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    serverUptime: process.uptime(),
+    memoryUsage: process.memoryUsage(),
+    endpoints
+  });
 });
 
 /**
@@ -359,10 +450,8 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
  * @swagger
  * /notificacion/seguro-lluvia:
  *   post:
- *     summary: Envía una notificación de seguro de lluvia vía WhatsApp
+ *     summary: Envía una notificación de seguro de lluvia
  *     tags: [Notificaciones]
- *     security:
- *       - ApiKeyAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -382,10 +471,6 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
- *       401:
- *         description: API key inválida
- *       500:
- *         description: Error del servidor
  */
 app.post("/notificacion/seguro-lluvia", async (req, res) => {
   const { telefono, customer_first_name, cupon, fechaValidoHasta } = req.body;
@@ -422,10 +507,8 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
  * @swagger
  * /notificacion/pin-llaves:
  *   post:
- *     summary: Envía una notificación con el PIN de llaves vía WhatsApp
+ *     summary: Envía una notificación con el PIN para retirar las llaves
  *     tags: [Notificaciones]
- *     security:
- *       - ApiKeyAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -445,10 +528,6 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
- *       401:
- *         description: API key inválida
- *       500:
- *         description: Error del servidor
  */
 app.post("/notificacion/pin-llaves", async (req, res) => {
   const { telefono, customer_first_name, codigo } = req.body;
@@ -479,7 +558,32 @@ app.post("/notificacion/pin-llaves", async (req, res) => {
   }
 });
 
-// Endpoint para notificación de recordatorio
+/**
+ * @swagger
+ * /notificacion/recordatorio:
+ *   post:
+ *     summary: Envía un recordatorio de turno
+ *     tags: [Notificaciones]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/TurnoConfirmado'
+ *     responses:
+ *       200:
+ *         description: Mensaje enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.post("/notificacion/recordatorio", async (req, res) => {
   const {
     telefono,
@@ -513,7 +617,42 @@ app.post("/notificacion/recordatorio", async (req, res) => {
   }
 });
 
-// Endpoint para notificación de aviso de lavado completado
+/**
+ * @swagger
+ * /notificacion/lavado-completado:
+ *   post:
+ *     summary: Envía una notificación de lavado completado
+ *     tags: [Notificaciones]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: ['telefono', 'customer_first_name']
+ *             properties:
+ *               telefono:
+ *                 type: string
+ *                 example: '1135784301'
+ *                 description: Número de teléfono sin prefijo internacional
+ *               customer_first_name:
+ *                 type: string
+ *                 example: 'Erick'
+ *                 description: Nombre del cliente
+ *     responses:
+ *       200:
+ *         description: Mensaje enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.post("/notificacion/lavado-completado", async (req, res) => {
   const { telefono, customer_first_name } = req.body;
 
@@ -549,10 +688,8 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
  * @swagger
  * /enviar-encuesta:
  *   post:
- *     summary: Envía una encuesta de satisfacción vía WhatsApp
+ *     summary: Envía una encuesta de satisfacción
  *     tags: [Encuestas]
- *     security:
- *       - ApiKeyAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -565,17 +702,20 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Success'
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 messageId:
+ *                   type: string
+ *                   example: '3EB0123456'
  *       400:
  *         description: Datos inválidos
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
- *       401:
- *         description: API key inválida
- *       500:
- *         description: Error del servidor
  */
 app.post("/enviar-encuesta", async (req, res) => {
   const {
@@ -665,6 +805,52 @@ app.post("/enviar-encuesta", async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /webhook/waapi:
+ *   post:
+ *     summary: Webhook para recibir eventos de WhatsApp
+ *     description: Endpoint que recibe y procesa eventos de la API de WhatsApp. Actualmente maneja eventos de encuestas (vote_update) pero está preparado para recibir cualquier tipo de evento.
+ *     tags: [Webhooks]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - event
+ *               - data
+ *             properties:
+ *               event:
+ *                 type: string
+ *                 description: Tipo de evento recibido de WhatsApp
+ *                 example: 'vote_update'
+ *               data:
+ *                 type: object
+ *                 description: Datos específicos del evento. La estructura varía según el tipo de evento.
+ *                 example:
+ *                   vote:
+ *                     voter: "5491112345678@c.us"
+ *                     selectedOptions:
+ *                       - name: "Excelente ⭐️"
+ *                         localId: 0
+ *                     parentMessage:
+ *                       id:
+ *                         id: "3EB0123456"
+ *     responses:
+ *       200:
+ *         description: Evento procesado exitosamente (siempre devuelve 200 para confirmar recepción)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                   description: Indica si el evento fue procesado correctamente
+ *                   example: true
+ */
 // Webhook global de WaAPI
 app.post(
   '/webhook/waapi',
@@ -699,35 +885,41 @@ app.get("/debug/pendientes", async (req, res) => {
   res.json(pendientes);
 });
 
-// Endpoint de prueba
-app.get("/test", (req, res) => {
-  const serverInfo = {
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    serverUptime: process.uptime(),
-    memoryUsage: process.memoryUsage(),
-    endpoints: {
-      notificaciones: [
-        "/notificacion/turno-confirmado",
-        "/notificacion/seguro-lluvia",
-        "/notificacion/pin-llaves",
-        "/notificacion/recordatorio",
-        "/notificacion/lavado-completado"
-      ],
-      encuestas: [
-        "/enviar-encuesta",
-        "/debug/pendientes"
-      ],
-      webhook: [
-        "/webhook/waapi"
-      ]
-    }
-  };
-
-  logger.info('Test endpoint called');
-  res.json(serverInfo);
-});
+/**
+ * @swagger
+ * /debug/pendientes:
+ *   get:
+ *     summary: Lista todas las encuestas pendientes
+ *     tags: [Debug]
+ *     responses:
+ *       200:
+ *         description: Lista de encuestas pendientes
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   key:
+ *                     type: string
+ *                     example: 'poll:ABC123'
+ *                   data:
+ *                     type: object
+ *                     properties:
+ *                       nombre:
+ *                         type: string
+ *                       apellido:
+ *                         type: string
+ *                       lavado:
+ *                         type: string
+ *                       fecha:
+ *                         type: string
+ *                       hora:
+ *                         type: string
+ *                       createdAt:
+ *                         type: number
+ */
 
 // Validaciones de seguridad en producción
 if (process.env.NODE_ENV === 'production') {
@@ -813,11 +1005,230 @@ if (process.env.NODE_ENV !== 'production') {
     });
 }
 
+/**
+ * @swagger
+ * /dev/generate-key:
+ *   get:
+ *     summary: Genera una nueva API key
+ *     tags: [Debug]
+ *     parameters:
+ *       - in: query
+ *         name: test
+ *         schema:
+ *           type: boolean
+ *         description: Si es true, genera una key de prueba
+ *     responses:
+ *       200:
+ *         description: API key generada exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 apiKey:
+ *                   type: string
+ *                   example: 'sl_test_5260b49b-16be-4a54-901c-6da3fc8424df_277dbc'
+ *                 type:
+ *                   type: string
+ *                   example: 'test'
+ *                 isValid:
+ *                   type: boolean
+ *                   example: true
+ *                 config:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *                     permissions:
+ *                       type: array
+ */
+
+/**
+ * @swagger
+ * /dev/list-keys:
+ *   get:
+ *     summary: Lista todas las API keys registradas
+ *     tags: [Debug]
+ *     responses:
+ *       200:
+ *         description: Lista de API keys
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               additionalProperties:
+ *                 type: object
+ *                 properties:
+ *                   name:
+ *                     type: string
+ *                   role:
+ *                     type: string
+ *                   permissions:
+ *                     type: array
+ */
+
+/**
+ * @swagger
+ * /dev/delete-key/{apiKey}:
+ *   delete:
+ *     summary: Elimina una API key
+ *     tags: [Debug]
+ *     parameters:
+ *       - in: path
+ *         name: apiKey
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: API key a eliminar
+ *     responses:
+ *       200:
+ *         description: API key eliminada exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       404:
+ *         description: API key no encontrada
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     SeguroLluvia:
+ *       type: object
+ *       required:
+ *         - telefono
+ *         - customer_first_name
+ *         - fecha
+ *         - hora
+ *       properties:
+ *         telefono:
+ *           type: string
+ *           example: '1135784301'
+ *           description: Número de teléfono sin prefijo internacional
+ *         customer_first_name:
+ *           type: string
+ *           example: 'Erick'
+ *           description: Nombre del cliente
+ *         fecha:
+ *           type: string
+ *           example: '2024-04-15'
+ *           description: Fecha del turno en formato YYYY-MM-DD
+ *         hora:
+ *           type: string
+ *           example: '14:30'
+ *           description: Hora del turno en formato HH:mm
+ *
+ *     PinLlaves:
+ *       type: object
+ *       required:
+ *         - telefono
+ *         - customer_first_name
+ *         - pin
+ *       properties:
+ *         telefono:
+ *           type: string
+ *           example: '1135784301'
+ *           description: Número de teléfono sin prefijo internacional
+ *         customer_first_name:
+ *           type: string
+ *           example: 'Erick'
+ *           description: Nombre del cliente
+ *         pin:
+ *           type: string
+ *           example: '1234'
+ *           description: PIN de 4 dígitos para retirar las llaves
+ *
+ *     TurnoConfirmado:
+ *       type: object
+ *       required:
+ *         - telefono
+ *         - customer_first_name
+ *         - fecha
+ *         - hora
+ *       properties:
+ *         telefono:
+ *           type: string
+ *           example: '1135784301'
+ *           description: Número de teléfono sin prefijo internacional
+ *         customer_first_name:
+ *           type: string
+ *           example: 'Erick'
+ *           description: Nombre del cliente
+ *         fecha:
+ *           type: string
+ *           example: '2024-04-15'
+ *           description: Fecha del turno en formato YYYY-MM-DD
+ *         hora:
+ *           type: string
+ *           example: '14:30'
+ *           description: Hora del turno en formato HH:mm
+ *
+ *     Encuesta:
+ *       type: object
+ *       required:
+ *         - telefono
+ *         - nombre
+ *         - apellido
+ *         - lavado
+ *         - fecha
+ *         - hora
+ *       properties:
+ *         telefono:
+ *           type: string
+ *           example: '1135784301'
+ *           description: Número de teléfono sin prefijo internacional
+ *         nombre:
+ *           type: string
+ *           example: 'Erick'
+ *           description: Nombre del cliente
+ *         apellido:
+ *           type: string
+ *           example: 'Kahlke'
+ *           description: Apellido del cliente
+ *         lavado:
+ *           type: string
+ *           example: 'Lavado Completo'
+ *           description: Tipo de lavado realizado
+ *         fecha:
+ *           type: string
+ *           example: '2024-04-15'
+ *           description: Fecha del lavado en formato YYYY-MM-DD
+ *         hora:
+ *           type: string
+ *           example: '14:30'
+ *           description: Hora del lavado en formato HH:mm
+ *
+ *     Success:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *           example: true
+ *         messageId:
+ *           type: string
+ *           example: '3EB0123456'
+ *
+ *     Error:
+ *       type: object
+ *       properties:
+ *         error:
+ *           type: string
+ *           example: 'Datos inválidos'
+ */
+
 // Agregar el middleware de manejo de errores al final
 app.use(errorHandler);
 
 // Puerto en el que corre el servidor
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  logger.info(`Servidor corriendo en el puerto ${port}`);
+app.listen(port, '0.0.0.0', () => {
+  logger.info(`Servidor corriendo en http://localhost:${port}`);
 });
