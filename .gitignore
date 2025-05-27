@@ -30,3 +30,7 @@ Thumbs.db
 # Data directory (API keys y otros datos persistentes)
 .data/
 .data/* 
+
+# Postman
+postman_collection.json
+postman_environment_*.json 
