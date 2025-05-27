@@ -48,6 +48,7 @@ PORT=3000
 WAAPI_TOKEN=tu_token_aqui
 WAAPI_INSTANCE_ID=tu_instance_id
 SHEETS_URL=tu_url_de_google_sheets
+MASTER_API_KEY=sl_master_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx_admin
 ```
 
 4. Iniciar el servidor:
@@ -69,6 +70,7 @@ npm run dev
 | WAAPI_TOKEN | Token de autenticación de WaAPI | Sí |
 | WAAPI_INSTANCE_ID | ID de instancia de WaAPI | Sí |
 | SHEETS_URL | URL del endpoint de Google Sheets | Sí |
+| MASTER_API_KEY | API key maestra para gestión de otras keys | Sí |
 
 ## 📱 Endpoints
 
@@ -102,12 +104,57 @@ Envía información del seguro de lluvia.
 
 La API utiliza un sistema de API keys para autenticación. Cada request debe incluir el header:
 ```
-X-API-Key: sl_live_xxxxxxxx
+X-API-Key: sl_[live|test]_xxxxxxxx_xxxxxx
 ```
 
 ### Tipos de API Keys
-- Testing: `sl_test_*`
-- Producción: `sl_live_*`
+- Master: `sl_master_*_admin` - Para gestión de otras API keys
+- Testing: `sl_test_*` - Para pruebas y desarrollo
+- Producción: `sl_live_*` - Para uso en producción
+
+### Gestión de API Keys
+La gestión de API keys se realiza a través de endpoints protegidos que requieren la master key:
+
+#### Generar nueva API key
+```bash
+curl -X POST http://[tu-servidor]/dev/generate-key \
+  -H "x-api-key: tu_master_key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Descripción de la key", "test": true}'
+```
+
+#### Listar API keys
+```bash
+curl http://[tu-servidor]/dev/list-keys \
+  -H "x-api-key: tu_master_key"
+```
+
+#### Eliminar API key
+```bash
+curl -X DELETE http://[tu-servidor]/dev/delete-key/[api-key-a-eliminar] \
+  -H "x-api-key: tu_master_key"
+```
+
+### Configuración de Master Key
+La master key se configura a través de la variable de entorno `MASTER_API_KEY`. Esta key:
+- No puede ser revocada
+- Es necesaria para gestionar otras API keys
+- Es válida en todos los ambientes
+- Tiene acceso total a todos los endpoints
+
+Para configurarla:
+```bash
+# En .bashrc o .zshrc
+export MASTER_API_KEY="tu_master_key"
+```
+
+### ⚠️ Consideraciones de Seguridad
+- La master key debe mantenerse segura y nunca compartirse
+- Solo debe estar disponible para administradores del sistema
+- Se recomienda rotar periódicamente las API keys de producción
+- Las API keys de test deben usarse solo en desarrollo
+- Monitorear el uso de API keys para detectar actividad sospechosa
+- En caso de compromiso de una API key, revocarla inmediatamente usando la master key
 
 ## 📊 Encuestas
 
