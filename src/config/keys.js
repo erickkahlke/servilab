@@ -16,7 +16,9 @@ const PUBLIC_ENDPOINTS = [
     '/test',  // endpoint de prueba
     '/dev/generate-key',  // endpoint de generación de API keys (solo en desarrollo)
     '/dev/list-keys',  // endpoint para listar API keys (solo en desarrollo)
-    '/dev/delete-key/:apiKey'  // endpoint para eliminar API keys (solo en desarrollo)
+    '/dev/delete-key/:apiKey',  // endpoint para eliminar API keys (solo en desarrollo)
+    '/docs',  // documentación Swagger
+    '/docs/*'  // archivos estáticos de Swagger UI
 ];
 
 // Lista de endpoints que usan la key de webhook
