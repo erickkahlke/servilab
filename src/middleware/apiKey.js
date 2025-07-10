@@ -1,4 +1,3 @@
-const { PUBLIC_ENDPOINTS } = require('../config/keys');
 const { hasPermissionForEndpoint } = require('../config/permissions');
 const { getApiKeyConfig, validateApiKey, isMasterKey } = require('../utils/apiKeyGenerator');
 

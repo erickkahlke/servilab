@@ -15,7 +15,7 @@ const { generalLimiter, authLimiter } = require('./src/middleware/rateLimiter');
 const { PUBLIC_ENDPOINTS } = require('./src/config/keys');
 
 // Importar el generador de API keys
-const { generateApiKey, validateApiKey, getKeyType, registerApiKey, listApiKeys, deleteApiKey } = require('./src/utils/apiKeyGenerator');
+const { generateApiKey, validateApiKey, getKeyType, registerApiKey, listApiKeys, deleteApiKey, isMasterKey } = require('./src/utils/apiKeyGenerator');
 
 // Test de despliegue automático
 console.log('Servidor iniciado - Versión con despliegue automático');
@@ -52,8 +52,58 @@ app.get('/docs', swaggerUi.setup(swaggerSpecs, swaggerUiOptions));
 // Aplicar rate limiting general a todas las rutas excepto docs
 app.use(/^(?!\/docs).+/, generalLimiter);
 
+// Middleware para permitir solicitudes desde cualquier origen (CORS)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-api-key"
+  );
+  if (req.method === "OPTIONS") {
+    res.header("Access-Control-Allow-Methods", "PUT, POST, PATCH, DELETE, GET");
+    return res.status(200).json({});
+  }
+  next();
+});
+
+// Definir rutas públicas antes del middleware de autenticación
+app.get("/test", (req, res) => {
+  const endpoints = {
+    notificaciones: [
+      "/notificacion/turno-confirmado",
+      "/notificacion/seguro-lluvia",
+      "/notificacion/pin-llaves",
+      "/notificacion/recordatorio",
+      "/notificacion/lavado-completado"
+    ],
+    encuestas: [
+      "/enviar-encuesta",
+      "/debug/pendientes"
+    ],
+    webhook: [
+      "/webhook/waapi"
+    ]
+  };
+
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    serverUptime: process.uptime(),
+    memoryUsage: process.memoryUsage(),
+    endpoints
+  });
+});
+
 // Aplicar validación de API key a todas las rutas excepto las públicas
 app.use((req, res, next) => {
+  const apiKey = req.header('x-api-key');
+
+  // Si es la master key, permitir acceso a todo
+  if (apiKey && isMasterKey(apiKey)) {
+    return next();
+  }
+
   // Si la ruta está en PUBLIC_ENDPOINTS, permitir sin API key
   if (PUBLIC_ENDPOINTS.some(endpoint => {
     // Convertir el endpoint a regex si contiene *
@@ -67,22 +117,8 @@ app.use((req, res, next) => {
     return next();
   }
   
-  // Si no es pública, aplicar validación de API key
+  // Si no es pública ni master key, aplicar validación normal
   return validateApiKeyMiddleware(req, res, next);
-});
-
-// Middleware para permitir solicitudes desde cualquier origen (CORS)
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
-  );
-  if (req.method === "OPTIONS") {
-    res.header("Access-Control-Allow-Methods", "PUT, POST, PATCH, DELETE, GET");
-    return res.status(200).json({});
-  }
-  next();
 });
 
 // ── Inicializar node-persist (se guarda en .data/polls, que Glitch NO borra) ──
@@ -368,33 +404,6 @@ const validarTurnoConfirmado = (req, res, next) => {
  *                       items:
  *                         type: string
  */
-app.get("/test", (req, res) => {
-  const endpoints = {
-    notificaciones: [
-      "/notificacion/turno-confirmado",
-      "/notificacion/seguro-lluvia",
-      "/notificacion/pin-llaves",
-      "/notificacion/recordatorio",
-      "/notificacion/lavado-completado"
-    ],
-    encuestas: [
-      "/enviar-encuesta",
-      "/debug/pendientes"
-    ],
-    webhook: [
-      "/webhook/waapi"
-    ]
-  };
-
-  res.json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    serverUptime: process.uptime(),
-    memoryUsage: process.memoryUsage(),
-    endpoints
-  });
-});
 
 /**
  * @swagger
