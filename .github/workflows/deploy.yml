@@ -48,8 +48,8 @@ jobs:
         echo "🚀 Iniciando despliegue..."
         ssh -o StrictHostKeyChecking=no -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_USER }}@${{ secrets.HOST }} << 'EOF'
           set -e
-          echo "📂 Cambiando al directorio del proyecto..."
-          cd /var/www/html/servilab
+          echo "📂 Cambiando al subdirectorio notify..."
+          cd /var/www/html/servilab/notify
           
           echo "⬇️ Actualizando código..."
           git fetch origin main
@@ -58,8 +58,13 @@ jobs:
           echo "📦 Instalando dependencias..."
           npm ci --production
           
-          echo "🔄 Reiniciando servicio..."
-          pm2 reload servilab || pm2 start server.js --name servilab -- --port 3000
+          echo "🔄 Reiniciando instancia notify en PM2..."
+          pm2 delete servilab_notify || true
+          pm2 start server.js \
+            --name servilab_notify \
+            --cwd /var/www/html/servilab/notify \
+            --env production
+          pm2 save
           
           echo "✅ Despliegue completado"
         EOF
