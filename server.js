@@ -64,6 +64,9 @@ const errorHandler = (err, req, res, next) => {
   });
 };
 
+// Configurar trust proxy para producción (detrás de proxy/load balancer)
+app.set('trust proxy', 1);
+
 // Middleware para parsear JSON
 app.use(express.json({ limit: "10mb" }));
 
