@@ -27,6 +27,33 @@ const logger = {
   warn: (message, ...args) => console.warn(`[WARN] ${message}`, ...args)
 };
 
+// Función helper para formatear logs de mensajes enviados
+const logMensajeEnviado = (tipo, destinatario, nombre = null, telefonoNormalizado = null) => {
+  const timestamp = new Date().toLocaleString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  
+  let logMessage = `[${timestamp}] ${tipo} enviado`;
+  
+  if (nombre) {
+    logMessage += ` a ${nombre}`;
+  }
+  
+  if (telefonoNormalizado) {
+    logMessage += ` (${telefonoNormalizado})`;
+  } else if (destinatario) {
+    logMessage += ` (${destinatario})`;
+  }
+  
+  console.log(logMessage);
+};
+
 // Middleware para manejo de errores
 const errorHandler = (err, req, res, next) => {
   logger.error('Error en la aplicación:', err);
@@ -211,7 +238,7 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0) => {
     );
     
     if (response.data?.status === 'success') {
-      logger.info(`Mensaje enviado exitosamente a ${chatId}`);
+      // El log específico se hará en cada endpoint con más detalles
       return response.data;
     } else {
       throw new Error('Respuesta no exitosa de WhatsApp API');
@@ -463,7 +490,7 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
     const message = `¡Hola ${customer_first_name}!\nTu turno está confirmado ✅\nTe esperamos el 🗓️${appointment_start_date} a las ${appointment_start_time} en ServiLab 🚗\n\n🤖 Mensaje automático. No requiere respuesta.`;
 
     await enviarMensajeWhatsApp(chatId, message);
-    console.log("Mensaje de turno confirmado enviado a " + telefonoNormalizado);
+    logMensajeEnviado("Mensaje de turno confirmado", chatId, customer_first_name, telefonoNormalizado);
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
@@ -520,7 +547,7 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
       `🗓️(Recordá que no es transferible y tiene validez hasta el ${fechaValidoHasta})`;
 
     await enviarMensajeWhatsApp(chatId, message);
-    console.log("Mensaje de seguro de lluvia enviado a " + telefonoNormalizado);
+    logMensajeEnviado("Mensaje de seguro de lluvia", chatId, customer_first_name, telefonoNormalizado);
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
@@ -575,7 +602,7 @@ app.post("/notificacion/pin-llaves", async (req, res) => {
       `Si necesitas ayuda ingresá a este link: servilab.ar/llaves)`;
 
     await enviarMensajeWhatsApp(chatId, message);
-    console.log("Mensaje de codigo de llaves enviado a " + telefonoNormalizado);
+    logMensajeEnviado("Mensaje de código de llaves", chatId, customer_first_name, telefonoNormalizado);
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
@@ -631,7 +658,7 @@ app.post("/notificacion/recordatorio", async (req, res) => {
     const message = `¡Hola ${customer_first_name}! \n⏰ Tu turno comienza las ${appointment_start_time}. Te esperamos en ServiLab 🚗 \n\n🤖 Mensaje automático. No requiere respuesta.`;
 
     await enviarMensajeWhatsApp(chatId, message);
-    console.log("Mensaje de recordatorio enviado a " + telefonoNormalizado);
+    logMensajeEnviado("Mensaje de recordatorio", chatId, customer_first_name, telefonoNormalizado);
     res
       .status(200)
       .json({
@@ -695,9 +722,7 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
     const message = `${customer_first_name}, tu vehículo está listo 🚗✨\nTe recordamos que estamos abiertos de 10 a 13.30hs y de 16 a 20.30hs\n\n🤖 Mensaje automático. No requiere respuesta.`;
 
     await enviarMensajeWhatsApp(chatId, message);
-    console.log(
-      "Mensaje de lavado finalizado enviado a " + telefonoNormalizado
-    );
+    logMensajeEnviado("Mensaje de lavado completado", chatId, customer_first_name, telefonoNormalizado);
     res
       .status(200)
       .json({
@@ -818,11 +843,8 @@ app.post("/enviar-encuesta", async (req, res) => {
       createdAt: Date.now(),
     });
 
-    console.log(
-      // LOG 3
-      `Encuesta enviada a ${nombre} ${apellido || ""} (${telNorm}) | ` +
-        `turno ${appointment_start_date} ${appointment_start_time} | ID: ${messageId}`
-    );
+    logMensajeEnviado("Encuesta de satisfacción", chatId, `${nombre} ${apellido || ""}`, telNorm);
+    console.log(`    Detalles: turno ${appointment_start_date} ${appointment_start_time} | ID: ${messageId}`);
 
     res.status(200).json({ success: true, messageId });
   } catch (err) {
