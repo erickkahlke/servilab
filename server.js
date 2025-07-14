@@ -364,13 +364,29 @@ const validaciones = {
   
   fecha: (fecha) => {
     if (!fecha) return false;
+    
+    // Log para debugging el formato de fecha recibido
+    console.log(`🔍 [DEBUG] Validando fecha: "${fecha}" (tipo: ${typeof fecha})`);
+    
     const date = new Date(fecha);
-    return date instanceof Date && !isNaN(date);
+    const isValid = date instanceof Date && !isNaN(date);
+    
+    console.log(`🔍 [DEBUG] Fecha parseada: ${date.toISOString()}, ¿Es válida? ${isValid}`);
+    
+    return isValid;
   },
   
   hora: (hora) => {
     if (!hora) return false;
-    return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(hora);
+    
+    // Log para debugging el formato de hora recibido
+    console.log(`🔍 [DEBUG] Validando hora: "${hora}" (tipo: ${typeof hora})`);
+    
+    const isValid = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(hora);
+    
+    console.log(`🔍 [DEBUG] ¿Hora válida? ${isValid} (esperamos formato HH:MM)`);
+    
+    return isValid;
   },
   
   nombre: (nombre) => {
