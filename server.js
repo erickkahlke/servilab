@@ -365,9 +365,6 @@ const validaciones = {
   fecha: (fecha) => {
     if (!fecha) return false;
     
-    // Log para debugging el formato de fecha recibido
-    console.log(`🔍 [DEBUG] Validando fecha: "${fecha}" (tipo: ${typeof fecha})`);
-    
     let date;
     
     // Intentar parsear diferentes formatos de fecha
@@ -379,7 +376,6 @@ const validaciones = {
         // Convertir DD/MM/YYYY a MM/DD/YYYY para que JavaScript lo entienda
         const usFormat = `${month}/${day}/${year}`;
         date = new Date(usFormat);
-        console.log(`🔍 [DEBUG] Formato DD/MM/YYYY detectado, convertido a: ${usFormat}`);
       } else {
         // Intentar parsear directamente
         date = new Date(fecha);
@@ -389,27 +385,12 @@ const validaciones = {
     }
     
     const isValid = date instanceof Date && !isNaN(date);
-    
-    if (isValid) {
-      console.log(`🔍 [DEBUG] Fecha parseada: ${date.toISOString()}, ✅ Es válida`);
-    } else {
-      console.log(`🔍 [DEBUG] ❌ Fecha inválida: ${fecha}`);
-    }
-    
     return isValid;
   },
   
   hora: (hora) => {
     if (!hora) return false;
-    
-    // Log para debugging el formato de hora recibido
-    console.log(`🔍 [DEBUG] Validando hora: "${hora}" (tipo: ${typeof hora})`);
-    
-    const isValid = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(hora);
-    
-    console.log(`🔍 [DEBUG] ¿Hora válida? ${isValid} (esperamos formato HH:MM)`);
-    
-    return isValid;
+    return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(hora);
   },
   
   nombre: (nombre) => {
@@ -420,7 +401,6 @@ const validaciones = {
 
 // Middleware de validación para turno confirmado
 const validarTurnoConfirmado = (req, res, next) => {
-  console.log('🔍 [DEBUG] Middleware validarTurnoConfirmado ejecutándose');
   const { telefono, customer_first_name, appointment_start_date, appointment_start_time } = req.body;
   
   if (!validaciones.telefono(telefono)) {
