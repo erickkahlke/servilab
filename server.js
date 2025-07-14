@@ -381,6 +381,7 @@ const validaciones = {
 
 // Middleware de validación para turno confirmado
 const validarTurnoConfirmado = (req, res, next) => {
+  console.log('🔍 [DEBUG] Middleware validarTurnoConfirmado ejecutándose');
   const { telefono, customer_first_name, appointment_start_date, appointment_start_time } = req.body;
   
   if (!validaciones.telefono(telefono)) {
