@@ -54,6 +54,41 @@ const logMensajeEnviado = (tipo, destinatario, nombre = null, telefonoNormalizad
   console.log(logMessage);
 };
 
+// Función helper para formatear logs de errores 400
+const logError400 = (req, mensaje, datosRecibidos = null) => {
+  const timestamp = new Date().toLocaleString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  
+  const ip = req.ip || req.connection.remoteAddress || 'IP desconocida';
+  const userAgent = req.get('User-Agent') || 'User-Agent desconocido';
+  
+  let logMessage = `[${timestamp}] ❌ ERROR 400 en ${req.method} ${req.path}`;
+  logMessage += ` | IP: ${ip}`;
+  logMessage += ` | Error: ${mensaje}`;
+  
+  if (datosRecibidos) {
+    // Ocultar información sensible como tokens, passwords, etc.
+    const datosSeguros = { ...datosRecibidos };
+    Object.keys(datosSeguros).forEach(key => {
+      if (key.toLowerCase().includes('token') || 
+          key.toLowerCase().includes('password') || 
+          key.toLowerCase().includes('secret')) {
+        datosSeguros[key] = '[OCULTO]';
+      }
+    });
+    logMessage += ` | Datos: ${JSON.stringify(datosSeguros)}`;
+  }
+  
+  console.error(logMessage);
+};
+
 // Middleware para manejo de errores
 const errorHandler = (err, req, res, next) => {
   logger.error('Error en la aplicación:', err);
@@ -349,15 +384,19 @@ const validarTurnoConfirmado = (req, res, next) => {
   const { telefono, customer_first_name, appointment_start_date, appointment_start_time } = req.body;
   
   if (!validaciones.telefono(telefono)) {
+    logError400(req, 'Teléfono inválido', { telefono });
     return res.status(400).json({ success: false, message: 'Teléfono inválido' });
   }
   if (!validaciones.nombre(customer_first_name)) {
+    logError400(req, 'Nombre inválido', { customer_first_name });
     return res.status(400).json({ success: false, message: 'Nombre inválido' });
   }
   if (!validaciones.fecha(appointment_start_date)) {
+    logError400(req, 'Fecha inválida', { appointment_start_date });
     return res.status(400).json({ success: false, message: 'Fecha inválida' });
   }
   if (!validaciones.hora(appointment_start_time)) {
+    logError400(req, 'Hora inválida', { appointment_start_time });
     return res.status(400).json({ success: false, message: 'Hora inválida' });
   }
   
@@ -481,6 +520,7 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
     !appointment_start_date ||
     !appointment_start_time
   ) {
+    logError400(req, 'Faltan datos requeridos para turno confirmado', req.body);
     return res
       .status(400)
       .json({ success: false, message: "Faltan datos requeridos" });
@@ -533,6 +573,7 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
 
   // Validación de campos requeridos (se corrigió para utilizar cupon y fechaValidoHasta)
   if (!telefono || !customer_first_name || !cupon || !fechaValidoHasta) {
+    logError400(req, 'Faltan datos requeridos para seguro de lluvia', req.body);
     return res
       .status(400)
       .json({ success: false, message: "Faltan datos requeridos" });
@@ -590,6 +631,7 @@ app.post("/notificacion/pin-llaves", async (req, res) => {
 
   // Validación de campos requeridos
   if (!telefono || !customer_first_name || !codigo) {
+    logError400(req, 'Faltan datos requeridos para pin de llaves', req.body);
     return res
       .status(400)
       .json({ success: false, message: "Faltan datos requeridos" });
@@ -649,6 +691,7 @@ app.post("/notificacion/recordatorio", async (req, res) => {
   } = req.body;
 
   if (!telefono || !customer_first_name) {
+    logError400(req, 'Faltan datos requeridos para recordatorio', req.body);
     return res
       .status(400)
       .json({ success: false, message: "Faltan datos requeridos" });
@@ -713,6 +756,7 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
   const { telefono, customer_first_name } = req.body;
 
   if (!telefono || !customer_first_name) {
+    logError400(req, 'Faltan datos requeridos para lavado completado', req.body);
     return res
       .status(400)
       .json({ success: false, message: "Faltan datos requeridos" });
@@ -789,6 +833,7 @@ app.post("/enviar-encuesta", async (req, res) => {
     !appointment_start_date ||
     !appointment_start_time
   ) {
+    logError400(req, 'Faltan datos requeridos para enviar encuesta', req.body);
     return res
       .status(400)
       .json({ success: false, message: "Faltan datos requeridos" });
@@ -1027,6 +1072,7 @@ app.post('/dev/generate-key', async (req, res) => {
     const { name, test = false } = req.body;
     
     if (!name) {
+      logError400(req, 'El nombre es requerido para generar API key', req.body);
       return res.status(400).json({
         success: false,
         message: 'El nombre es requerido'
@@ -1117,6 +1163,7 @@ app.delete('/dev/delete-key/:apiKey', async (req, res) => {
     }
   } catch (error) {
     if (error.message === 'La API key maestra no puede ser eliminada') {
+      logError400(req, 'Intento de eliminar API key maestra', { apiKey: req.params.apiKey });
       return res.status(400).json({
         success: false,
         message: error.message
