@@ -368,10 +368,33 @@ const validaciones = {
     // Log para debugging el formato de fecha recibido
     console.log(`🔍 [DEBUG] Validando fecha: "${fecha}" (tipo: ${typeof fecha})`);
     
-    const date = new Date(fecha);
+    let date;
+    
+    // Intentar parsear diferentes formatos de fecha
+    if (typeof fecha === 'string') {
+      // Si viene en formato DD/MM/YYYY (Booknetic), convertir a MM/DD/YYYY
+      const ddmmyyyyMatch = fecha.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (ddmmyyyyMatch) {
+        const [, day, month, year] = ddmmyyyyMatch;
+        // Convertir DD/MM/YYYY a MM/DD/YYYY para que JavaScript lo entienda
+        const usFormat = `${month}/${day}/${year}`;
+        date = new Date(usFormat);
+        console.log(`🔍 [DEBUG] Formato DD/MM/YYYY detectado, convertido a: ${usFormat}`);
+      } else {
+        // Intentar parsear directamente
+        date = new Date(fecha);
+      }
+    } else {
+      date = new Date(fecha);
+    }
+    
     const isValid = date instanceof Date && !isNaN(date);
     
-    console.log(`🔍 [DEBUG] Fecha parseada: ${date.toISOString()}, ¿Es válida? ${isValid}`);
+    if (isValid) {
+      console.log(`🔍 [DEBUG] Fecha parseada: ${date.toISOString()}, ✅ Es válida`);
+    } else {
+      console.log(`🔍 [DEBUG] ❌ Fecha inválida: ${fecha}`);
+    }
     
     return isValid;
   },
