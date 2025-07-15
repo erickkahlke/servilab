@@ -786,7 +786,7 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
     const telefonoNormalizado = normalizarTelefono(telefono);
     const chatId = `${telefonoNormalizado.replace("+", "")}@c.us`;
 
-    const message = `${customer_first_name}, tu vehículo está listo 🚗✨\nTe recordamos que estamos abiertos de 10 a 13.30hs y de 16 a 20.30hs\n\n🤖 Mensaje automático. No requiere respuesta.`;
+    const message = `${customer_first_name}, tu vehículo está listo 🚗✨\nTe recordamos que estamos abiertos de 10 a 13.30hs y de 16 a 19.30hs\n\n🤖 Mensaje automático. No requiere respuesta.`;
 
     await enviarMensajeWhatsApp(chatId, message);
     logMensajeEnviado("Mensaje de lavado completado", chatId, customer_first_name, telefonoNormalizado);
