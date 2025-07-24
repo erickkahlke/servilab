@@ -1329,7 +1329,7 @@ app.delete('/dev/delete-key/:apiKey', async (req, res) => {
 app.use(errorHandler);
 
 // Puerto en el que corre el servidor
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3002;
 app.listen(port, '0.0.0.0', () => {
   logger.info(`Servidor corriendo en http://localhost:${port}`);
 });
