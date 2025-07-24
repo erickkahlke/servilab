@@ -3,7 +3,7 @@ const express = require("express");
 const axios = require("axios");
 const app = express();
 const persist = require("node-persist");
-require('dotenv').config();
+require('dotenv').config({ path: '/var/www/html/servilab/.env' });
 
 // Importar Swagger
 const swaggerUi = require('swagger-ui-express');
