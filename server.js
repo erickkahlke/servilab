@@ -1,6 +1,7 @@
 // Importar las dependencias necesarias
 const express = require("express");
 const axios = require("axios");
+const crypto = require("crypto");
 const app = express();
 const persist = require("node-persist");
 require('dotenv').config({ path: '/var/www/html/servilab/.env' });
@@ -198,7 +199,8 @@ const whatsappConfig = {
   instanceId: process.env.WAAPI_INSTANCE_ID,
   token: process.env.WAAPI_TOKEN,
   maxRetries: 3,
-  retryDelay: 3000
+  retryDelay: 5000,
+  timeout: 30000 // 30 segundos de timeout (aumentado para evitar timeouts prematuros)
 };
 
 // Función para normalizar el número de teléfono
@@ -253,8 +255,28 @@ const normalizarTelefono = (telefono) => {
   return `+549${areaCode}${phoneNumber}`;
 };
 
-// Función mejorada para enviar mensajes a WhatsApp con reintentos
+// Función para generar hash de idempotencia
+const generarHashIdempotencia = (chatId, message) => {
+  return crypto.createHash('md5').update(`${chatId}:${message}`).digest('hex');
+};
+
+// Función mejorada para enviar mensajes a WhatsApp con reintentos e idempotencia
 const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0) => {
+  // Generar hash para idempotencia
+  const messageHash = generarHashIdempotencia(chatId, message);
+  const idempotencyKey = `msg:${messageHash}`;
+  
+  // Verificar si este mensaje ya se envió recientemente (últimos 5 minutos)
+  const lastSent = await persist.getItem(idempotencyKey);
+  if (lastSent) {
+    const timeSinceLastSent = Date.now() - lastSent;
+    const fiveMinutes = 5 * 60 * 1000;
+    if (timeSinceLastSent < fiveMinutes) {
+      logger.warn(`Mensaje duplicado detectado para ${chatId}. Ignorando envío (último envío hace ${Math.round(timeSinceLastSent / 1000)}s)`);
+      return { status: 'success', duplicate: true };
+    }
+  }
+
   const body = {
     message,
     chatId,
@@ -271,19 +293,31 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0) => {
           Host: "waapi.app",
           "Content-Type": "application/json",
         },
-        timeout: 5000 // 5 segundos de timeout
+        timeout: whatsappConfig.timeout
       }
     );
     
     if (response.data?.status === 'success') {
+      // Marcar como enviado para idempotencia (guardar timestamp)
+      await persist.setItem(idempotencyKey, Date.now());
       // El log específico se hará en cada endpoint con más detalles
       return response.data;
     } else {
       throw new Error('Respuesta no exitosa de WhatsApp API');
     }
   } catch (error) {
+    // Si es un error de timeout, ser más cauteloso con los reintentos
+    const isTimeout = error.code === 'ECONNABORTED' || error.message.includes('timeout');
+    
+    if (isTimeout && retryCount === 0) {
+      // En el primer intento con timeout, esperar un poco más antes de reintentar
+      // porque el mensaje puede haberse enviado pero la respuesta tardó
+      logger.warn(`Timeout en envío a ${chatId}. Esperando antes de verificar si se envió...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
     if (retryCount < whatsappConfig.maxRetries) {
-      logger.warn(`Reintentando envío de mensaje a ${chatId}. Intento ${retryCount + 1}/${whatsappConfig.maxRetries}`);
+      logger.warn(`Reintentando envío de mensaje a ${chatId}. Intento ${retryCount + 1}/${whatsappConfig.maxRetries}${isTimeout ? ' (timeout previo)' : ''}`);
       await new Promise(resolve => setTimeout(resolve, whatsappConfig.retryDelay));
       return enviarMensajeWhatsApp(chatId, message, retryCount + 1);
     }
