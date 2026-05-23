@@ -4,7 +4,11 @@ const axios = require("axios");
 const crypto = require("crypto");
 const app = express();
 const persist = require("node-persist");
-require('dotenv').config({ path: '/var/www/html/servilab/.env' });
+const fs = require("fs");
+const path = require("path");
+const prodEnvPath = "/var/www/html/servilab/.env";
+const envPath = fs.existsSync(prodEnvPath) ? prodEnvPath : path.resolve(__dirname, ".env");
+require('dotenv').config({ path: envPath });
 
 // Importar Swagger
 const swaggerUi = require('swagger-ui-express');
@@ -13,7 +17,7 @@ const swaggerSpecs = require('./src/swagger');
 // Importar middlewares de seguridad
 const validateApiKeyMiddleware = require('./src/middleware/apiKey');
 const { generalLimiter, authLimiter } = require('./src/middleware/rateLimiter');
-const { PUBLIC_ENDPOINTS } = require('./src/config/keys');
+const { PUBLIC_ENDPOINTS, WEBHOOK_ENDPOINTS } = require('./src/config/keys');
 
 // Importar el generador de API keys
 const { generateApiKey, validateApiKey, getKeyType, registerApiKey, listApiKeys, deleteApiKey, isMasterKey } = require('./src/utils/apiKeyGenerator');
@@ -191,8 +195,8 @@ app.use((req, res, next) => {
     return next();
   }
 
-  // Si la ruta está en PUBLIC_ENDPOINTS, permitir sin API key
-  if (PUBLIC_ENDPOINTS.some(endpoint => {
+  // Si la ruta está en PUBLIC_ENDPOINTS o WEBHOOK_ENDPOINTS, permitir sin API key
+  const isBypassEndpoint = [...PUBLIC_ENDPOINTS, ...(WEBHOOK_ENDPOINTS || [])].some(endpoint => {
     // Convertir el endpoint a regex si contiene *
     if (endpoint.includes('*')) {
       const regexStr = endpoint.replace('*', '.*');
@@ -200,7 +204,9 @@ app.use((req, res, next) => {
       return regex.test(req.path);
     }
     return endpoint === req.path;
-  })) {
+  });
+
+  if (isBypassEndpoint) {
     return next();
   }
   
@@ -388,59 +394,75 @@ const SHEETS_URL = process.env.SHEETS_URL;
 
 // Funcion para analizar encuestas
 async function analizarEncuesta(vote) {
-  /*  vote obj que viste en consola:
-      {
-        voter: "549113…@c.us",
-        selectedOptions:[{ name:"Excelente ⭐️", localId:0 }],
-        parentMessage:{ id:{ id:"3EB0…50", … } }
-      }
-  */
   const voter = vote.voter; // JID del cliente
   const opcion = vote.selectedOptions?.[0]?.name || "—";
   const messageId = vote.parentMessage?.id?.id; // el ID real del poll
   const llaveDone = `done:${messageId}:${voter}`; // p/ idempotencia
 
-  // ── Evitar duplicados ───────────────────────────────────────────
-  if (await persist.getItem(llaveDone)) return;
+  const firstVoteData = await persist.getItem(llaveDone);
+  let poll;
+  let esActualizacion = false;
 
-  // ── Buscar la encuesta pendiente ────────────────────────────────
-  const poll = await persist.getItem(`poll:${messageId}`);
-  if (!poll) {
-    console.warn("Voto huérfano: la encuesta no estaba pendiente", messageId);
-    await persist.setItem(llaveDone, true);
-    return;
+  if (firstVoteData) {
+    // Ya votó anteriormente. Comprobar ventana de 5 minutos.
+    const timeElapsed = Date.now() - firstVoteData.timestamp;
+    const fiveMinutes = 5 * 60 * 1000;
+
+    if (timeElapsed > fiveMinutes) {
+      console.log(`[INFO] Voto duplicado ignorado (fuera de la ventana de 5m) para ID ${messageId}`);
+      return;
+    }
+
+    console.log(`[INFO] Actualización de voto detectada dentro de los 5m para ID ${messageId}`);
+    poll = firstVoteData.poll;
+    esActualizacion = true;
+  } else {
+    // Es el primer voto. Buscar la encuesta en pendientes.
+    poll = await persist.getItem(`poll:${messageId}`);
+    if (!poll) {
+      console.warn("Voto huérfano: la encuesta no estaba pendiente", messageId);
+      return;
+    }
   }
 
-  // ── Grabar la fila en Google Sheets ─────────────────────────────
+  // ── Grabar/Actualizar en Google Sheets ─────────────────────────────
   try {
     await axios.post(
       SHEETS_URL,
       {
         nombre: poll.nombre,
-        apellido: poll.apellido,
+        apellido: poll.apellido || "",
         lavado: poll.lavado,
         fecha: poll.fecha,
         hora: poll.hora,
         calificacion: opcion,
+        messageId: messageId, // Enviamos el messageId único para identificar la fila
       },
       { headers: { "Content-Type": "application/json" } }
     );
   } catch (err) {
     console.error("⚠️  Error subiendo a Sheets, se reintentará:", err.message);
-    return; // no borro el pending: volverá a intentar
+    return; // Retornamos sin borrar el pendiente para volver a intentar
   }
 
-  // ── Limpieza e idempotencia ─────────────────────────────────────
-  await persist.removeItem(`poll:${messageId}`);
-  await persist.setItem(llaveDone, true);
+  // ── Persistencia y Limpieza de Pendientes ─────────────────────────
+  if (!esActualizacion) {
+    // Guardar contexto del primer voto
+    await persist.setItem(llaveDone, {
+      timestamp: Date.now(),
+      poll: poll
+    });
+    // Eliminar de pendientes
+    await persist.removeItem(`poll:${messageId}`);
 
-  // ── Agradecimiento al cliente ───────────────────────────────────
-  await enviarMensajeWhatsApp(
-    voter,
-    "¡Gracias por tu opinión! Nos ayuda a mejorar 🙌"
-  );
+    // ── Enviar agradecimiento (Solo en el primer voto) ────────────────
+    await enviarMensajeWhatsApp(
+      voter,
+      "¡Gracias por tu opinión! Nos ayuda a mejorar 🙌"
+    );
+  }
 
-  console.log(`Voto procesado (${opcion}) para ID ${messageId}`);
+  console.log(`Voto procesado (${opcion}) para ID ${messageId} (Actualización: ${esActualizacion})`);
 }
 
 // Funciones de validación
