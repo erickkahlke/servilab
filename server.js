@@ -28,6 +28,27 @@ const logger = {
   warn: (message, ...args) => console.warn(`[WARN] ${message}`, ...args)
 };
 
+// Función helper para generar ID único de request
+const generarRequestId = () => {
+  return `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+};
+
+// Función helper para obtener información del request
+const obtenerInfoRequest = (req) => {
+  return {
+    ip: req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for'] || 'unknown',
+    userAgent: req.headers['user-agent'] || 'unknown',
+    method: req.method,
+    path: req.path,
+    headers: {
+      'x-forwarded-for': req.headers['x-forwarded-for'],
+      'x-real-ip': req.headers['x-real-ip'],
+      'referer': req.headers['referer'],
+      'origin': req.headers['origin']
+    }
+  };
+};
+
 // Función helper para formatear logs de mensajes enviados
 const logMensajeEnviado = (tipo, destinatario, nombre = null, telefonoNormalizado = null) => {
   const timestamp = new Date().toLocaleString('es-AR', {
@@ -261,10 +282,15 @@ const generarHashIdempotencia = (chatId, message) => {
 };
 
 // Función mejorada para enviar mensajes a WhatsApp con reintentos e idempotencia
-const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0) => {
+const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0, requestId = null) => {
+  const timestamp = new Date().toISOString();
+  const attemptId = requestId ? `${requestId}-${retryCount}` : `msg-${Date.now()}-${retryCount}`;
+  
   // Generar hash para idempotencia
   const messageHash = generarHashIdempotencia(chatId, message);
   const idempotencyKey = `msg:${messageHash}`;
+  
+  logger.info(`[${attemptId}] Intento de envío WhatsApp iniciado | chatId: ${chatId} | retryCount: ${retryCount} | hash: ${messageHash.substring(0, 8)}...`);
   
   // Verificar si este mensaje ya se envió recientemente (últimos 5 minutos)
   const lastSent = await persist.getItem(idempotencyKey);
@@ -272,8 +298,10 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0) => {
     const timeSinceLastSent = Date.now() - lastSent;
     const fiveMinutes = 5 * 60 * 1000;
     if (timeSinceLastSent < fiveMinutes) {
-      logger.warn(`Mensaje duplicado detectado para ${chatId}. Ignorando envío (último envío hace ${Math.round(timeSinceLastSent / 1000)}s)`);
-      return { status: 'success', duplicate: true };
+      logger.warn(`[${attemptId}] ⚠️ DUPLICADO DETECTADO | chatId: ${chatId} | tiempo desde último envío: ${Math.round(timeSinceLastSent / 1000)}s | hash: ${messageHash.substring(0, 8)}...`);
+      return { status: 'success', duplicate: true, attemptId };
+    } else {
+      logger.info(`[${attemptId}] Mensaje anterior encontrado pero expirado (${Math.round(timeSinceLastSent / 1000)}s), procediendo con envío`);
     }
   }
 
@@ -283,7 +311,10 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0) => {
     previewLink: false,
   };
 
+  const startTime = Date.now();
   try {
+    logger.info(`[${attemptId}] Enviando request a WaAPI | URL: ${whatsappConfig.baseURL}/instances/${whatsappConfig.instanceId}/client/action/send-message | timeout: ${whatsappConfig.timeout}ms`);
+    
     const response = await axios.post(
       `${whatsappConfig.baseURL}/instances/${whatsappConfig.instanceId}/client/action/send-message`,
       body,
@@ -297,35 +328,58 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0) => {
       }
     );
     
+    const responseTime = Date.now() - startTime;
+    logger.info(`[${attemptId}] ✅ Respuesta recibida de WaAPI | tiempo: ${responseTime}ms | status: ${response.data?.status} | statusCode: ${response.status}`);
+    
     if (response.data?.status === 'success') {
       // Marcar como enviado para idempotencia (guardar timestamp)
       await persist.setItem(idempotencyKey, Date.now());
-      // El log específico se hará en cada endpoint con más detalles
-      return response.data;
+      logger.info(`[${attemptId}] ✅ Mensaje enviado exitosamente | chatId: ${chatId} | guardado en idempotencia: ${idempotencyKey}`);
+      
+      // Log detallado de la respuesta si existe data
+      if (response.data?.data) {
+        logger.info(`[${attemptId}] Detalles respuesta WaAPI: ${JSON.stringify(response.data.data).substring(0, 200)}...`);
+      }
+      
+      return { ...response.data, attemptId };
     } else {
-      throw new Error('Respuesta no exitosa de WhatsApp API');
+      logger.error(`[${attemptId}] ❌ Respuesta no exitosa de WaAPI | status: ${response.data?.status} | data: ${JSON.stringify(response.data)}`);
+      throw new Error(`Respuesta no exitosa de WhatsApp API: ${JSON.stringify(response.data)}`);
     }
   } catch (error) {
-    // Si es un error de timeout, ser más cauteloso con los reintentos
+    const responseTime = Date.now() - startTime;
     const isTimeout = error.code === 'ECONNABORTED' || error.message.includes('timeout');
+    const errorType = isTimeout ? 'TIMEOUT' : error.response ? `HTTP_${error.response.status}` : 'NETWORK_ERROR';
     
+    logger.error(`[${attemptId}] ❌ Error en envío WhatsApp | tipo: ${errorType} | tiempo: ${responseTime}ms | retryCount: ${retryCount}`);
+    logger.error(`[${attemptId}] Detalles error: code=${error.code} | message=${error.message}`);
+    
+    if (error.response) {
+      logger.error(`[${attemptId}] Respuesta error HTTP: status=${error.response.status} | data=${JSON.stringify(error.response.data)}`);
+    }
+    
+    if (error.request && !error.response) {
+      logger.error(`[${attemptId}] No se recibió respuesta del servidor (posible timeout o red)`);
+    }
+    
+    // Si es un error de timeout, ser más cauteloso con los reintentos
     if (isTimeout && retryCount === 0) {
       // En el primer intento con timeout, esperar un poco más antes de reintentar
       // porque el mensaje puede haberse enviado pero la respuesta tardó
-      logger.warn(`Timeout en envío a ${chatId}. Esperando antes de verificar si se envió...`);
+      logger.warn(`[${attemptId}] ⏱️ Timeout detectado. Esperando 2s antes de verificar si el mensaje se envió...`);
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
     if (retryCount < whatsappConfig.maxRetries) {
-      logger.warn(`Reintentando envío de mensaje a ${chatId}. Intento ${retryCount + 1}/${whatsappConfig.maxRetries}${isTimeout ? ' (timeout previo)' : ''}`);
+      logger.warn(`[${attemptId}] 🔄 Reintentando envío | intento ${retryCount + 1}/${whatsappConfig.maxRetries} | delay: ${whatsappConfig.retryDelay}ms${isTimeout ? ' (timeout previo)' : ''}`);
       await new Promise(resolve => setTimeout(resolve, whatsappConfig.retryDelay));
-      return enviarMensajeWhatsApp(chatId, message, retryCount + 1);
+      return enviarMensajeWhatsApp(chatId, message, retryCount + 1, requestId || attemptId.split('-')[0]);
     }
     
-    logger.error('Error al enviar mensaje de WhatsApp:', error.message);
+    logger.error(`[${attemptId}] ❌ ERROR FINAL: Se agotaron los reintentos | chatId: ${chatId} | total intentos: ${retryCount + 1}`);
     throw new Error(
-      "Error al enviar el mensaje: " +
-        (error.response ? error.response.data : error.message)
+      `Error al enviar el mensaje después de ${retryCount + 1} intentos: ` +
+        (error.response ? JSON.stringify(error.response.data) : error.message)
     );
   }
 };
@@ -561,6 +615,14 @@ const validarTurnoConfirmado = (req, res, next) => {
  *         description: Error del servidor
  */
 app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, res) => {
+  const requestId = generarRequestId();
+  const requestInfo = obtenerInfoRequest(req);
+  const timestamp = new Date().toISOString();
+  
+  logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/turno-confirmado | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
+  logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
+  logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
+  
   const {
     telefono,
     customer_first_name,
@@ -574,6 +636,7 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
     !appointment_start_date ||
     !appointment_start_time
   ) {
+    logger.warn(`[${requestId}] ⚠️ Validación fallida: Faltan datos requeridos`);
     logError400(req, 'Faltan datos requeridos para turno confirmado', req.body);
     return res
       .status(400)
@@ -584,14 +647,24 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
     const telefonoNormalizado = normalizarTelefono(telefono);
     const chatId = `${telefonoNormalizado.replace("+", "")}@c.us`;
 
+    logger.info(`[${requestId}] Procesando envío | telefono: ${telefono} → normalizado: ${telefonoNormalizado} → chatId: ${chatId}`);
+
     const message = `¡Hola ${customer_first_name}!\nTu turno está confirmado ✅\nTe esperamos el 🗓️${appointment_start_date} a las ${appointment_start_time} en ServiLab 🚗\n\n🤖 Mensaje automático. No requiere respuesta.`;
 
-    await enviarMensajeWhatsApp(chatId, message);
+    const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
+    
+    if (result.duplicate) {
+      logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
+    }
+    
     logMensajeEnviado("Mensaje de turno confirmado", chatId, customer_first_name, telefonoNormalizado);
+    logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
+    
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
   } catch (error) {
+    logger.error(`[${requestId}] ❌ ERROR EN REQUEST | error: ${error.message} | stack: ${error.stack}`);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -623,10 +696,19 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
  *               $ref: '#/components/schemas/Error'
  */
 app.post("/notificacion/seguro-lluvia", async (req, res) => {
+  const requestId = generarRequestId();
+  const requestInfo = obtenerInfoRequest(req);
+  const timestamp = new Date().toISOString();
+  
+  logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/seguro-lluvia | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
+  logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
+  logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
+  
   const { telefono, customer_first_name, cupon, fechaValidoHasta } = req.body;
 
   // Validación de campos requeridos (se corrigió para utilizar cupon y fechaValidoHasta)
   if (!telefono || !customer_first_name || !cupon || !fechaValidoHasta) {
+    logger.warn(`[${requestId}] ⚠️ Validación fallida: Faltan datos requeridos`);
     logError400(req, 'Faltan datos requeridos para seguro de lluvia', req.body);
     return res
       .status(400)
@@ -637,6 +719,8 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
     const telefonoNormalizado = normalizarTelefono(telefono);
     const chatId = `${telefonoNormalizado.replace("+", "")}@c.us`;
 
+    logger.info(`[${requestId}] Procesando envío | telefono: ${telefono} → normalizado: ${telefonoNormalizado} → chatId: ${chatId}`);
+
     const message =
       `Tu seguro de lluvia está ACTIVADO ☂️ ✅\n\n` +
       `La protección incluida en tu SuperLavado te permite volver a lavar tu vehículo sin cargo dentro los próximos 3 días 🙌\n` +
@@ -644,12 +728,20 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
       `http://turnos.servilab.ar\n\n` +
       `🗓️(Recordá que no es transferible y tiene validez hasta el ${fechaValidoHasta})`;
 
-    await enviarMensajeWhatsApp(chatId, message);
+    const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
+    
+    if (result.duplicate) {
+      logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
+    }
+    
     logMensajeEnviado("Mensaje de seguro de lluvia", chatId, customer_first_name, telefonoNormalizado);
+    logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
+    
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
   } catch (error) {
+    logger.error(`[${requestId}] ❌ ERROR EN REQUEST | error: ${error.message} | stack: ${error.stack}`);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -681,10 +773,19 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 app.post("/notificacion/pin-llaves", async (req, res) => {
+  const requestId = generarRequestId();
+  const requestInfo = obtenerInfoRequest(req);
+  const timestamp = new Date().toISOString();
+  
+  logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/pin-llaves | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
+  logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
+  logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
+  
   const { telefono, customer_first_name, codigo } = req.body;
 
   // Validación de campos requeridos
   if (!telefono || !customer_first_name || !codigo) {
+    logger.warn(`[${requestId}] ⚠️ Validación fallida: Faltan datos requeridos`);
     logError400(req, 'Faltan datos requeridos para pin de llaves', req.body);
     return res
       .status(400)
@@ -695,17 +796,27 @@ app.post("/notificacion/pin-llaves", async (req, res) => {
     const telefonoNormalizado = normalizarTelefono(telefono);
     const chatId = `${telefonoNormalizado.replace("+", "")}@c.us`;
 
+    logger.info(`[${requestId}] Procesando envío | telefono: ${telefono} → normalizado: ${telefonoNormalizado} → chatId: ${chatId}`);
+
     const message =
       `🔑 Retirá las llaves de tu vehículo\n\n` +
       `Están disponibles las 24hs y de forma 100% segura en nuestro dispenser. Obtenelas ingresando tu pin: *${codigo}*\n\n` +
       `Si necesitas ayuda ingresá a este link: ( servilab.ar/llaves )`;
 
-    await enviarMensajeWhatsApp(chatId, message);
+    const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
+    
+    if (result.duplicate) {
+      logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
+    }
+    
     logMensajeEnviado("Mensaje de código de llaves", chatId, customer_first_name, telefonoNormalizado);
+    logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
+    
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
   } catch (error) {
+    logger.error(`[${requestId}] ❌ ERROR EN REQUEST | error: ${error.message} | stack: ${error.stack}`);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -737,6 +848,14 @@ app.post("/notificacion/pin-llaves", async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 app.post("/notificacion/recordatorio", async (req, res) => {
+  const requestId = generarRequestId();
+  const requestInfo = obtenerInfoRequest(req);
+  const timestamp = new Date().toISOString();
+  
+  logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/recordatorio | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
+  logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
+  logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
+  
   const {
     telefono,
     customer_first_name,
@@ -745,6 +864,7 @@ app.post("/notificacion/recordatorio", async (req, res) => {
   } = req.body;
 
   if (!telefono || !customer_first_name) {
+    logger.warn(`[${requestId}] ⚠️ Validación fallida: Faltan datos requeridos`);
     logError400(req, 'Faltan datos requeridos para recordatorio', req.body);
     return res
       .status(400)
@@ -755,10 +875,19 @@ app.post("/notificacion/recordatorio", async (req, res) => {
     const telefonoNormalizado = normalizarTelefono(telefono);
     const chatId = `${telefonoNormalizado.replace("+", "")}@c.us`;
 
+    logger.info(`[${requestId}] Procesando envío | telefono: ${telefono} → normalizado: ${telefonoNormalizado} → chatId: ${chatId}`);
+
     const message = `¡Hola ${customer_first_name}! \n⏰ Tu turno comienza las ${appointment_start_time}. Te esperamos en ServiLab 🚗 \n\n🤖 Mensaje automático. No requiere respuesta.`;
 
-    await enviarMensajeWhatsApp(chatId, message);
+    const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
+    
+    if (result.duplicate) {
+      logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
+    }
+    
     logMensajeEnviado("Mensaje de recordatorio", chatId, customer_first_name, telefonoNormalizado);
+    logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
+    
     res
       .status(200)
       .json({
@@ -766,6 +895,7 @@ app.post("/notificacion/recordatorio", async (req, res) => {
         message: "Mensaje de recordatorio enviado exitosamente",
       });
   } catch (error) {
+    logger.error(`[${requestId}] ❌ ERROR EN REQUEST | error: ${error.message} | stack: ${error.stack}`);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -807,9 +937,18 @@ app.post("/notificacion/recordatorio", async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 app.post("/notificacion/lavado-completado", async (req, res) => {
+  const requestId = generarRequestId();
+  const requestInfo = obtenerInfoRequest(req);
+  const timestamp = new Date().toISOString();
+  
+  logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/lavado-completado | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
+  logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
+  logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
+  
   const { telefono, customer_first_name } = req.body;
 
   if (!telefono || !customer_first_name) {
+    logger.warn(`[${requestId}] ⚠️ Validación fallida: Faltan datos requeridos`);
     logError400(req, 'Faltan datos requeridos para lavado completado', req.body);
     return res
       .status(400)
@@ -820,10 +959,19 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
     const telefonoNormalizado = normalizarTelefono(telefono);
     const chatId = `${telefonoNormalizado.replace("+", "")}@c.us`;
 
+    logger.info(`[${requestId}] Procesando envío | telefono: ${telefono} → normalizado: ${telefonoNormalizado} → chatId: ${chatId}`);
+
     const message = `${customer_first_name}, tu vehículo está listo 🚗✨\nTe recordamos que estamos abiertos de 10 a 13.30hs y de 16 a 20.30hs\n\n🤖 Mensaje automático. No requiere respuesta.`;
 
-    await enviarMensajeWhatsApp(chatId, message);
+    const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
+    
+    if (result.duplicate) {
+      logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
+    }
+    
     logMensajeEnviado("Mensaje de lavado completado", chatId, customer_first_name, telefonoNormalizado);
+    logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
+    
     res
       .status(200)
       .json({
@@ -832,6 +980,7 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
           "Mensaje de lavado completado enviado exitosamente al" + chatId,
       });
   } catch (error) {
+    logger.error(`[${requestId}] ❌ ERROR EN REQUEST | error: ${error.message} | stack: ${error.stack}`);
     res.status(500).json({ success: false, message: error.message });
   }
 });
