@@ -430,7 +430,7 @@ async function inicializarAlertasPendientes() {
                 if (valorNumerico !== null && valorNumerico < 4) {
                   const pollInfo = currentData.poll || {};
                   const cliente = `${pollInfo.nombre} ${pollInfo.apellido || ""}`.trim();
-                  const telefonoCliente = voter.split('@')[0];
+                  const telefonoCliente = pollInfo.telefono ? pollInfo.telefono.replace('+', '') : voter.split('@')[0];
 
                   const mensajeAlerta = `⚠️ *Alerta de Cliente Disconforme (Post-Reinicio)* ⚠️\n\n` +
                     `Un cliente ha finalizado su encuesta con una calificación baja:\n\n` +
@@ -565,7 +565,7 @@ async function analizarEncuesta(vote) {
       if (valorNumerico !== null && valorNumerico < 4) {
         const pollInfo = voteData.poll || {};
         const cliente = `${pollInfo.nombre} ${pollInfo.apellido || ""}`.trim();
-        const telefonoCliente = voter.split('@')[0];
+        const telefonoCliente = pollInfo.telefono ? pollInfo.telefono.replace('+', '') : voter.split('@')[0];
 
         const mensajeAlerta = `⚠️ *Alerta de Cliente Disconforme* ⚠️\n\n` +
           `Un cliente ha finalizado su encuesta con una calificación baja:\n\n` +
@@ -1332,6 +1332,7 @@ app.post("/enviar-encuesta", async (req, res) => {
       lavado,
       fecha: appointment_start_date,
       hora: appointment_start_time,
+      telefono: telNorm, // ← Guardamos el teléfono normalizado del cliente
       createdAt: Date.now(),
     });
 
