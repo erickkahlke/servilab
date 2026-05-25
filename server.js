@@ -165,11 +165,13 @@ app.get("/test", (req, res) => {
       "/notificacion/seguro-lluvia",
       "/notificacion/pin-llaves",
       "/notificacion/recordatorio",
-      "/notificacion/lavado-completado"
+      "/notificacion/lavado-completado",
+      "/notificacion/grupo-interno"
     ],
     encuestas: [
       "/enviar-encuesta",
-      "/debug/pendientes"
+      "/debug/pendientes",
+      "/encuesta/resultados"
     ],
     webhook: [
       "/webhook/waapi"
@@ -218,6 +220,8 @@ app.use((req, res, next) => {
 (async () => {
   await persist.init({ dir: ".data/polls" }); // podés cambiar el nombre si querés
   console.log("Almacenamiento persistente inicializado");
+  // Inicializar alertas de disconformidad pendientes tras reinicio del servidor
+  await inicializarAlertasPendientes();
 })();
 
 // Configuración de WhatsApp API
@@ -392,6 +396,76 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0, requestId 
 
 const SHEETS_URL = process.env.SHEETS_URL;
 
+// Registro en memoria de temporizadores de alertas de disconformidad activos
+const activeAlertTimeouts = {};
+
+// Programar alertas pendientes tras reinicio del servidor
+async function inicializarAlertasPendientes() {
+  try {
+    const keys = await persist.keys();
+    const fiveMinutes = 5 * 60 * 1000;
+    const now = Date.now();
+    let reprogramadasCount = 0;
+
+    for (const key of keys) {
+      if (key.startsWith("done:")) {
+        const voteData = await persist.getItem(key);
+        if (voteData && voteData.timestamp && voteData.calificacion) {
+          const timeElapsed = now - voteData.timestamp;
+          if (timeElapsed < fiveMinutes) {
+            const delay = fiveMinutes - timeElapsed;
+            const parts = key.split(":");
+            const voter = parts[2]; // JID del cliente (done:messageId:voter)
+
+            logger.info(`[ALERTA] ⏱️ Programando alerta pendiente tras reinicio para ${key} con delay de ${Math.round(delay / 1000)}s`);
+            reprogramadasCount++;
+
+            activeAlertTimeouts[key] = setTimeout(async () => {
+              try {
+                delete activeAlertTimeouts[key];
+                const currentData = await persist.getItem(key);
+                if (!currentData || !currentData.calificacion) return;
+
+                const valorNumerico = obtenerValorNumerico(currentData.calificacion);
+                if (valorNumerico !== null && valorNumerico < 4) {
+                  const pollInfo = currentData.poll || {};
+                  const cliente = `${pollInfo.nombre} ${pollInfo.apellido || ""}`.trim();
+                  const telefonoCliente = voter.split('@')[0];
+
+                  const mensajeAlerta = `⚠️ *Alerta de Cliente Disconforme (Post-Reinicio)* ⚠️\n\n` +
+                    `Un cliente ha finalizado su encuesta con una calificación baja:\n\n` +
+                    `• *Cliente:* ${cliente}\n` +
+                    `• *Teléfono:* +${telefonoCliente}\n` +
+                    `• *Fecha/Hora Turno:* ${pollInfo.fecha || ""} ${pollInfo.hora || ""}\n` +
+                    `• *Calificación:* ${currentData.calificacion} (${valorNumerico}/5)\n\n` +
+                    `👉 *Acción recomendada:* Contactar al cliente para entender su disconformidad.\n\n` +
+                    `🤖 Enviado automaticamente`;
+
+                  logger.info(`[ALERTA] Enviando alerta de cliente disconforme (post-reinicio) al grupo interno para el cliente ${cliente}`);
+
+                  await enviarMensajeWhatsApp(
+                    "120363206309706318@g.us",
+                    mensajeAlerta,
+                    0,
+                    `alert-${Date.now()}`
+                  );
+                }
+              } catch (err) {
+                console.error("Error al procesar alerta pendiente tras reinicio:", err);
+              }
+            }, delay);
+          }
+        }
+      }
+    }
+    if (reprogramadasCount > 0) {
+      console.log(`[ALERTA] Se reprogramaron exitosamente ${reprogramadasCount} alertas pendientes de envío.`);
+    }
+  } catch (err) {
+    console.error("Error al inicializar alertas de disconformidad pendientes:", err);
+  }
+}
+
 // Funcion para analizar encuestas
 async function analizarEncuesta(vote) {
   const voter = vote.voter; // JID del cliente
@@ -447,10 +521,11 @@ async function analizarEncuesta(vote) {
 
   // ── Persistencia y Limpieza de Pendientes ─────────────────────────
   if (!esActualizacion) {
-    // Guardar contexto del primer voto
+    // Guardar contexto del primer voto e incluir calificación inicial
     await persist.setItem(llaveDone, {
       timestamp: Date.now(),
-      poll: poll
+      poll: poll,
+      calificacion: opcion
     });
     // Eliminar de pendientes
     await persist.removeItem(`poll:${messageId}`);
@@ -460,7 +535,60 @@ async function analizarEncuesta(vote) {
       voter,
       "¡Gracias por tu opinión! Nos ayuda a seguir mejorando 🙌"
     );
+  } else {
+    // Es una actualización dentro del rango de 5 minutos, refrescar la calificación guardada
+    await persist.setItem(llaveDone, {
+      ...firstVoteData,
+      calificacion: opcion
+    });
   }
+
+  // ── Gestión de Alertas de Disconformidad (5 Minutos) ────────────────
+  // Si ya existía un temporizador para este voto, cancelarlo (evita spam si el cliente cambia de parecer rápido)
+  if (activeAlertTimeouts[llaveDone]) {
+    clearTimeout(activeAlertTimeouts[llaveDone]);
+    delete activeAlertTimeouts[llaveDone];
+  }
+
+  // Programar evaluación final de la calificación en 5 minutos
+  activeAlertTimeouts[llaveDone] = setTimeout(async () => {
+    try {
+      delete activeAlertTimeouts[llaveDone];
+
+      // Cargar datos actuales desde persistencia (voto definitivo)
+      const voteData = await persist.getItem(llaveDone);
+      if (!voteData || !voteData.calificacion) return;
+
+      const valorNumerico = obtenerValorNumerico(voteData.calificacion);
+
+      // Si la calificación definitiva es menor a 4 (Buena) -> es decir, Regular (3) o Mala (1)
+      if (valorNumerico !== null && valorNumerico < 4) {
+        const pollInfo = voteData.poll || {};
+        const cliente = `${pollInfo.nombre} ${pollInfo.apellido || ""}`.trim();
+        const telefonoCliente = voter.split('@')[0];
+
+        const mensajeAlerta = `⚠️ *Alerta de Cliente Disconforme* ⚠️\n\n` +
+          `Un cliente ha finalizado su encuesta con una calificación baja:\n\n` +
+          `• *Cliente:* ${cliente}\n` +
+          `• *Teléfono:* +${telefonoCliente}\n` +
+          `• *Fecha/Hora Turno:* ${pollInfo.fecha || ""} ${pollInfo.hora || ""}\n` +
+          `• *Calificación:* ${voteData.calificacion} (${valorNumerico}/5)\n\n` +
+          `👉 *Acción recomendada:* Contactar al cliente para entender su disconformidad y resolver el inconveniente.\n\n` +
+          `🤖 Enviado automaticamente`;
+
+        logger.info(`[ALERTA] Enviando alerta de cliente disconforme al grupo interno para el cliente ${cliente}`);
+
+        await enviarMensajeWhatsApp(
+          "120363206309706318@g.us",
+          mensajeAlerta,
+          0,
+          `alert-${Date.now()}`
+        );
+      }
+    } catch (err) {
+      console.error("Error al procesar alerta de cliente disconforme:", err);
+    }
+  }, 5 * 60 * 1000); // 5 minutos
 
   console.log(`Voto procesado (${opcion}) para ID ${messageId} (Actualización: ${esActualizacion})`);
 }
@@ -1009,6 +1137,97 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
 
 /**
  * @swagger
+ * /notificacion/grupo-interno:
+ *   post:
+ *     summary: Envía un mensaje genérico al grupo interno de la empresa
+ *     description: Permite enviar cualquier comunicación al grupo interno de ServiLab. Requiere una API Key con permisos de notificaciones.
+ *     tags: [Notificaciones]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - mensaje
+ *             properties:
+ *               mensaje:
+ *                 type: string
+ *                 description: El contenido del mensaje a enviar (también acepta el parámetro 'message')
+ *                 example: '🚨 Alerta: Reporte de cierre de caja del día de hoy listo.'
+ *     responses:
+ *       200:
+ *         description: Mensaje enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 messageId:
+ *                   type: string
+ *                   example: '3EB0123456'
+ *       400:
+ *         description: Datos inválidos o mensaje vacío
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+app.post("/notificacion/grupo-interno", async (req, res) => {
+  const requestId = generarRequestId();
+  const requestInfo = obtenerInfoRequest(req);
+  const timestamp = new Date().toISOString();
+
+  logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/grupo-interno | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
+  logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
+  logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
+
+  const mensaje = req.body.mensaje || req.body.message;
+
+  if (!mensaje || typeof mensaje !== 'string' || mensaje.trim() === '') {
+    logger.warn(`[${requestId}] ⚠️ Validación fallida: Mensaje inválido o vacío`);
+    logError400(req, 'Mensaje inválido o vacío para el grupo interno', req.body);
+    return res.status(400).json({
+      success: false,
+      message: "El campo 'mensaje' es requerido y no puede estar vacío"
+    });
+  }
+
+  const grupoJid = "120363206309706318@g.us";
+
+  try {
+    logger.info(`[${requestId}] Procesando envío a grupo interno | JID: ${grupoJid}`);
+
+    const result = await enviarMensajeWhatsApp(grupoJid, mensaje.trim(), 0, requestId);
+
+    if (result.duplicate) {
+      logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado para grupo interno`);
+    }
+
+    logMensajeEnviado("Mensaje a grupo interno", grupoJid, "Grupo Interno", "Grupo");
+    logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | JID: ${grupoJid}`);
+
+    res.status(200).json({
+      success: true,
+      messageId: result.data?.id?.id || result.attemptId
+    });
+  } catch (error) {
+    logger.error(`[${requestId}] ❌ ERROR EN REQUEST | error: ${error.message} | stack: ${error.stack}`);
+    res.status(500).json({
+      success: false,
+      message: "Error al enviar el mensaje de WhatsApp al grupo interno",
+      error: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
  * /enviar-encuesta:
  *   post:
  *     summary: Envía una encuesta de satisfacción
@@ -1256,12 +1475,12 @@ const obtenerValorNumerico = (calificacion) => {
 // Función helper para normalizar cualquier formato de fecha a YYYY-MM-DD
 const normalizarFechaYYYYMMDD = (fechaStr) => {
   if (!fechaStr || typeof fechaStr !== 'string') return '';
-  
+
   // Si ya es YYYY-MM-DD, devolver directamente
   if (/^\d{4}-\d{2}-\d{2}$/.test(fechaStr)) {
     return fechaStr;
   }
-  
+
   // Si es DD/MM/YYYY, convertir a YYYY-MM-DD
   const ddmmyyyyMatch = fechaStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (ddmmyyyyMatch) {
@@ -1270,7 +1489,7 @@ const normalizarFechaYYYYMMDD = (fechaStr) => {
     const paddedMonth = month.padStart(2, '0');
     return `${year}-${paddedMonth}-${paddedDay}`;
   }
-  
+
   // Intentar parsear con Date
   try {
     const parsed = new Date(fechaStr);
@@ -1283,7 +1502,7 @@ const normalizarFechaYYYYMMDD = (fechaStr) => {
   } catch (e) {
     // Ignorar
   }
-  
+
   return fechaStr; // Devolver original si no se puede normalizar
 };
 
@@ -1291,7 +1510,7 @@ const normalizarFechaYYYYMMDD = (fechaStr) => {
 const parseFechaHora = (fechaStr, horaStr) => {
   const normalizedDate = normalizarFechaYYYYMMDD(fechaStr);
   const timePart = (horaStr && /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(horaStr)) ? horaStr : "00:00";
-  
+
   const parsedDate = new Date(`${normalizedDate}T${timePart}`);
   if (isNaN(parsedDate.getTime())) {
     return new Date(0);
@@ -1394,9 +1613,9 @@ app.get("/encuesta/resultados", async (req, res) => {
     // Validar formato de parámetro "desde" si se envía
     if (desde) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(desde)) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "El parámetro 'desde' debe tener el formato YYYY-MM-DD" 
+        return res.status(400).json({
+          success: false,
+          message: "El parámetro 'desde' debe tener el formato YYYY-MM-DD"
         });
       }
       resultados = resultados.filter(r => {
@@ -1408,9 +1627,9 @@ app.get("/encuesta/resultados", async (req, res) => {
     // Validar formato de parámetro "hasta" si se envía
     if (hasta) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(hasta)) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "El parámetro 'hasta' debe tener el formato YYYY-MM-DD" 
+        return res.status(400).json({
+          success: false,
+          message: "El parámetro 'hasta' debe tener el formato YYYY-MM-DD"
         });
       }
       resultados = resultados.filter(r => {
@@ -1451,10 +1670,10 @@ app.get("/encuesta/resultados", async (req, res) => {
     });
   } catch (error) {
     console.error("Error obteniendo resultados de Google Sheets:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error al comunicarse con Google Sheets", 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      message: "Error al comunicarse con Google Sheets",
+      error: error.message
     });
   }
 });

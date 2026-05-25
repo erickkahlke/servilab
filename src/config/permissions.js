@@ -8,7 +8,8 @@ const PERMISSIONS = {
             '/notificacion/seguro-lluvia',
             '/notificacion/pin-llaves',
             '/notificacion/recordatorio',
-            '/notificacion/lavado-completado'
+            '/notificacion/lavado-completado',
+            '/notificacion/grupo-interno'
         ]
     },
     'notifications:all': {
