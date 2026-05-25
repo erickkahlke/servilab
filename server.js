@@ -64,19 +64,19 @@ const logMensajeEnviado = (tipo, destinatario, nombre = null, telefonoNormalizad
     minute: '2-digit',
     second: '2-digit'
   });
-  
+
   let logMessage = `[${timestamp}] ${tipo} enviado`;
-  
+
   if (nombre) {
     logMessage += ` a ${nombre}`;
   }
-  
+
   if (telefonoNormalizado) {
     logMessage += ` (${telefonoNormalizado})`;
   } else if (destinatario) {
     logMessage += ` (${destinatario})`;
   }
-  
+
   console.log(logMessage);
 };
 
@@ -91,27 +91,27 @@ const logError400 = (req, mensaje, datosRecibidos = null) => {
     minute: '2-digit',
     second: '2-digit'
   });
-  
+
   const ip = req.ip || req.connection.remoteAddress || 'IP desconocida';
   const userAgent = req.get('User-Agent') || 'User-Agent desconocido';
-  
+
   let logMessage = `[${timestamp}] ❌ ERROR 400 en ${req.method} ${req.path}`;
   logMessage += ` | IP: ${ip}`;
   logMessage += ` | Error: ${mensaje}`;
-  
+
   if (datosRecibidos) {
     // Ocultar información sensible como tokens, passwords, etc.
     const datosSeguros = { ...datosRecibidos };
     Object.keys(datosSeguros).forEach(key => {
-      if (key.toLowerCase().includes('token') || 
-          key.toLowerCase().includes('password') || 
-          key.toLowerCase().includes('secret')) {
+      if (key.toLowerCase().includes('token') ||
+        key.toLowerCase().includes('password') ||
+        key.toLowerCase().includes('secret')) {
         datosSeguros[key] = '[OCULTO]';
       }
     });
     logMessage += ` | Datos: ${JSON.stringify(datosSeguros)}`;
   }
-  
+
   console.error(logMessage);
 };
 
@@ -209,7 +209,7 @@ app.use((req, res, next) => {
   if (isBypassEndpoint) {
     return next();
   }
-  
+
   // Si no es pública ni master key, aplicar validación normal
   return validateApiKeyMiddleware(req, res, next);
 });
@@ -291,13 +291,13 @@ const generarHashIdempotencia = (chatId, message) => {
 const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0, requestId = null) => {
   const timestamp = new Date().toISOString();
   const attemptId = requestId ? `${requestId}-${retryCount}` : `msg-${Date.now()}-${retryCount}`;
-  
+
   // Generar hash para idempotencia
   const messageHash = generarHashIdempotencia(chatId, message);
   const idempotencyKey = `msg:${messageHash}`;
-  
+
   logger.info(`[${attemptId}] Intento de envío WhatsApp iniciado | chatId: ${chatId} | retryCount: ${retryCount} | hash: ${messageHash.substring(0, 8)}...`);
-  
+
   // Verificar si este mensaje ya se envió recientemente (últimos 5 minutos)
   const lastSent = await persist.getItem(idempotencyKey);
   if (lastSent) {
@@ -320,7 +320,7 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0, requestId 
   const startTime = Date.now();
   try {
     logger.info(`[${attemptId}] Enviando request a WaAPI | URL: ${whatsappConfig.baseURL}/instances/${whatsappConfig.instanceId}/client/action/send-message | timeout: ${whatsappConfig.timeout}ms`);
-    
+
     const response = await axios.post(
       `${whatsappConfig.baseURL}/instances/${whatsappConfig.instanceId}/client/action/send-message`,
       body,
@@ -333,20 +333,20 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0, requestId 
         timeout: whatsappConfig.timeout
       }
     );
-    
+
     const responseTime = Date.now() - startTime;
     logger.info(`[${attemptId}] ✅ Respuesta recibida de WaAPI | tiempo: ${responseTime}ms | status: ${response.data?.status} | statusCode: ${response.status}`);
-    
+
     if (response.data?.status === 'success') {
       // Marcar como enviado para idempotencia (guardar timestamp)
       await persist.setItem(idempotencyKey, Date.now());
       logger.info(`[${attemptId}] ✅ Mensaje enviado exitosamente | chatId: ${chatId} | guardado en idempotencia: ${idempotencyKey}`);
-      
+
       // Log detallado de la respuesta si existe data
       if (response.data?.data) {
         logger.info(`[${attemptId}] Detalles respuesta WaAPI: ${JSON.stringify(response.data.data).substring(0, 200)}...`);
       }
-      
+
       return { ...response.data, attemptId };
     } else {
       logger.error(`[${attemptId}] ❌ Respuesta no exitosa de WaAPI | status: ${response.data?.status} | data: ${JSON.stringify(response.data)}`);
@@ -356,18 +356,18 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0, requestId 
     const responseTime = Date.now() - startTime;
     const isTimeout = error.code === 'ECONNABORTED' || error.message.includes('timeout');
     const errorType = isTimeout ? 'TIMEOUT' : error.response ? `HTTP_${error.response.status}` : 'NETWORK_ERROR';
-    
+
     logger.error(`[${attemptId}] ❌ Error en envío WhatsApp | tipo: ${errorType} | tiempo: ${responseTime}ms | retryCount: ${retryCount}`);
     logger.error(`[${attemptId}] Detalles error: code=${error.code} | message=${error.message}`);
-    
+
     if (error.response) {
       logger.error(`[${attemptId}] Respuesta error HTTP: status=${error.response.status} | data=${JSON.stringify(error.response.data)}`);
     }
-    
+
     if (error.request && !error.response) {
       logger.error(`[${attemptId}] No se recibió respuesta del servidor (posible timeout o red)`);
     }
-    
+
     // Si es un error de timeout, ser más cauteloso con los reintentos
     if (isTimeout && retryCount === 0) {
       // En el primer intento con timeout, esperar un poco más antes de reintentar
@@ -375,17 +375,17 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0, requestId 
       logger.warn(`[${attemptId}] ⏱️ Timeout detectado. Esperando 2s antes de verificar si el mensaje se envió...`);
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    
+
     if (retryCount < whatsappConfig.maxRetries) {
       logger.warn(`[${attemptId}] 🔄 Reintentando envío | intento ${retryCount + 1}/${whatsappConfig.maxRetries} | delay: ${whatsappConfig.retryDelay}ms${isTimeout ? ' (timeout previo)' : ''}`);
       await new Promise(resolve => setTimeout(resolve, whatsappConfig.retryDelay));
       return enviarMensajeWhatsApp(chatId, message, retryCount + 1, requestId || attemptId.split('-')[0]);
     }
-    
+
     logger.error(`[${attemptId}] ❌ ERROR FINAL: Se agotaron los reintentos | chatId: ${chatId} | total intentos: ${retryCount + 1}`);
     throw new Error(
       `Error al enviar el mensaje después de ${retryCount + 1} intentos: ` +
-        (error.response ? JSON.stringify(error.response.data) : error.message)
+      (error.response ? JSON.stringify(error.response.data) : error.message)
     );
   }
 };
@@ -458,7 +458,7 @@ async function analizarEncuesta(vote) {
     // ── Enviar agradecimiento (Solo en el primer voto) ────────────────
     await enviarMensajeWhatsApp(
       voter,
-      "¡Gracias por tu opinión! Nos ayuda a mejorar 🙌"
+      "¡Gracias por tu opinión! Nos ayuda a seguir mejorando 🙌"
     );
   }
 
@@ -471,12 +471,12 @@ const validaciones = {
     if (!tel || typeof tel !== 'string') return false;
     return tel.replace(/[^0-9]/g, '').length >= 8;
   },
-  
+
   fecha: (fecha) => {
     if (!fecha) return false;
-    
+
     let date;
-    
+
     // Intentar parsear diferentes formatos de fecha
     if (typeof fecha === 'string') {
       // Si viene en formato DD/MM/YYYY (Booknetic), convertir a MM/DD/YYYY
@@ -493,16 +493,16 @@ const validaciones = {
     } else {
       date = new Date(fecha);
     }
-    
+
     const isValid = date instanceof Date && !isNaN(date);
     return isValid;
   },
-  
+
   hora: (hora) => {
     if (!hora) return false;
     return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(hora);
   },
-  
+
   nombre: (nombre) => {
     if (!nombre || typeof nombre !== 'string') return false;
     return nombre.length >= 2 && nombre.length <= 50;
@@ -512,7 +512,7 @@ const validaciones = {
 // Middleware de validación para turno confirmado
 const validarTurnoConfirmado = (req, res, next) => {
   const { telefono, customer_first_name, appointment_start_date, appointment_start_time } = req.body;
-  
+
   if (!validaciones.telefono(telefono)) {
     logError400(req, 'Teléfono inválido', { telefono });
     return res.status(400).json({ success: false, message: 'Teléfono inválido' });
@@ -529,7 +529,7 @@ const validarTurnoConfirmado = (req, res, next) => {
     logError400(req, 'Hora inválida', { appointment_start_time });
     return res.status(400).json({ success: false, message: 'Hora inválida' });
   }
-  
+
   next();
 };
 
@@ -640,11 +640,11 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
   const requestId = generarRequestId();
   const requestInfo = obtenerInfoRequest(req);
   const timestamp = new Date().toISOString();
-  
+
   logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/turno-confirmado | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
   logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
   logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
-  
+
   const {
     telefono,
     customer_first_name,
@@ -674,14 +674,14 @@ app.post("/notificacion/turno-confirmado", validarTurnoConfirmado, async (req, r
     const message = `¡Hola ${customer_first_name}!\nTu turno está confirmado ✅\nTe esperamos el 🗓️${appointment_start_date} a las ${appointment_start_time} en ServiLab 🚗\n\n🤖 Mensaje automático. No requiere respuesta.`;
 
     const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
-    
+
     if (result.duplicate) {
       logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
     }
-    
+
     logMensajeEnviado("Mensaje de turno confirmado", chatId, customer_first_name, telefonoNormalizado);
     logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
-    
+
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
@@ -721,11 +721,11 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
   const requestId = generarRequestId();
   const requestInfo = obtenerInfoRequest(req);
   const timestamp = new Date().toISOString();
-  
+
   logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/seguro-lluvia | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
   logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
   logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
-  
+
   const { telefono, customer_first_name, cupon, fechaValidoHasta } = req.body;
 
   // Validación de campos requeridos (se corrigió para utilizar cupon y fechaValidoHasta)
@@ -751,14 +751,14 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
       `🗓️(Recordá que no es transferible y tiene validez hasta el ${fechaValidoHasta})`;
 
     const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
-    
+
     if (result.duplicate) {
       logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
     }
-    
+
     logMensajeEnviado("Mensaje de seguro de lluvia", chatId, customer_first_name, telefonoNormalizado);
     logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
-    
+
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
@@ -798,11 +798,11 @@ app.post("/notificacion/pin-llaves", async (req, res) => {
   const requestId = generarRequestId();
   const requestInfo = obtenerInfoRequest(req);
   const timestamp = new Date().toISOString();
-  
+
   logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/pin-llaves | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
   logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
   logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
-  
+
   const { telefono, customer_first_name, codigo } = req.body;
 
   // Validación de campos requeridos
@@ -826,14 +826,14 @@ app.post("/notificacion/pin-llaves", async (req, res) => {
       `Si necesitas ayuda ingresá a este link: ( servilab.ar/llaves )`;
 
     const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
-    
+
     if (result.duplicate) {
       logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
     }
-    
+
     logMensajeEnviado("Mensaje de código de llaves", chatId, customer_first_name, telefonoNormalizado);
     logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
-    
+
     res
       .status(200)
       .json({ success: true, message: "Mensaje enviado exitosamente" });
@@ -873,11 +873,11 @@ app.post("/notificacion/recordatorio", async (req, res) => {
   const requestId = generarRequestId();
   const requestInfo = obtenerInfoRequest(req);
   const timestamp = new Date().toISOString();
-  
+
   logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/recordatorio | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
   logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
   logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
-  
+
   const {
     telefono,
     customer_first_name,
@@ -902,14 +902,14 @@ app.post("/notificacion/recordatorio", async (req, res) => {
     const message = `¡Hola ${customer_first_name}! \n⏰ Tu turno comienza las ${appointment_start_time}. Te esperamos en ServiLab 🚗 \n\n🤖 Mensaje automático. No requiere respuesta.`;
 
     const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
-    
+
     if (result.duplicate) {
       logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
     }
-    
+
     logMensajeEnviado("Mensaje de recordatorio", chatId, customer_first_name, telefonoNormalizado);
     logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
-    
+
     res
       .status(200)
       .json({
@@ -962,11 +962,11 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
   const requestId = generarRequestId();
   const requestInfo = obtenerInfoRequest(req);
   const timestamp = new Date().toISOString();
-  
+
   logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/lavado-completado | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
   logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
   logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
-  
+
   const { telefono, customer_first_name } = req.body;
 
   if (!telefono || !customer_first_name) {
@@ -986,14 +986,14 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
     const message = `${customer_first_name}, tu vehículo está listo 🚗✨\nTe recordamos que estamos abiertos de 10 a 13.30hs y de 16 a 20.30hs\n\n🤖 Mensaje automático. No requiere respuesta.`;
 
     const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
-    
+
     if (result.duplicate) {
       logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
     }
-    
+
     logMensajeEnviado("Mensaje de lavado completado", chatId, customer_first_name, telefonoNormalizado);
     logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
-    
+
     res
       .status(200)
       .json({
@@ -1072,7 +1072,7 @@ app.post("/enviar-encuesta", async (req, res) => {
     // 2) Definir la encuesta
     const pollBody = {
       chatId,
-      caption: "¿Cómo calificarías tu lavado en ServiLab? 🧽",
+      caption: "¿Cómo calificarías tu experiencia de hoy? 🧽",
       options: ["Excelente ⭐️", "Buena 👍", "Regular 😕", "Mala 👎"],
       multipleAnswers: false,
     };
@@ -1242,24 +1242,241 @@ app.get("/debug/pendientes", async (req, res) => {
  *                         type: number
  */
 
+// Función helper para mapear calificaciones textuales a valores numéricos NPS
+const obtenerValorNumerico = (calificacion) => {
+  if (!calificacion || typeof calificacion !== 'string') return null;
+  const texto = calificacion.toLowerCase();
+  if (texto.includes('excelente')) return 5;
+  if (texto.includes('buena')) return 4;
+  if (texto.includes('regular')) return 3;
+  if (texto.includes('mala')) return 1;
+  return null;
+};
+
+// Función helper para normalizar cualquier formato de fecha a YYYY-MM-DD
+const normalizarFechaYYYYMMDD = (fechaStr) => {
+  if (!fechaStr || typeof fechaStr !== 'string') return '';
+  
+  // Si ya es YYYY-MM-DD, devolver directamente
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fechaStr)) {
+    return fechaStr;
+  }
+  
+  // Si es DD/MM/YYYY, convertir a YYYY-MM-DD
+  const ddmmyyyyMatch = fechaStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (ddmmyyyyMatch) {
+    const [, day, month, year] = ddmmyyyyMatch;
+    const paddedDay = day.padStart(2, '0');
+    const paddedMonth = month.padStart(2, '0');
+    return `${year}-${paddedMonth}-${paddedDay}`;
+  }
+  
+  // Intentar parsear con Date
+  try {
+    const parsed = new Date(fechaStr);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  } catch (e) {
+    // Ignorar
+  }
+  
+  return fechaStr; // Devolver original si no se puede normalizar
+};
+
+// Función helper para parsear fecha y hora para la comparación y ordenación
+const parseFechaHora = (fechaStr, horaStr) => {
+  const normalizedDate = normalizarFechaYYYYMMDD(fechaStr);
+  const timePart = (horaStr && /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(horaStr)) ? horaStr : "00:00";
+  
+  const parsedDate = new Date(`${normalizedDate}T${timePart}`);
+  if (isNaN(parsedDate.getTime())) {
+    return new Date(0);
+  }
+  return parsedDate;
+};
+
+/**
+ * @swagger
+ * /encuesta/resultados:
+ *   get:
+ *     summary: Obtiene los resultados de las encuestas en tiempo real con estadísticas y promedio NPS
+ *     description: Consulta en tiempo real la planilla de Google Sheets, aplica filtros de fecha YYYY-MM-DD, ordena cronológicamente por la fecha y hora del turno, y calcula la calificación promedio para el periodo seleccionado. Requiere API key autorizada.
+ *     tags: [Encuestas]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: desde
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Fecha de inicio de periodo (YYYY-MM-DD, inclusiva)
+ *         example: '2026-05-01'
+ *       - in: query
+ *         name: hasta
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Fecha de fin de periodo (YYYY-MM-DD, inclusiva)
+ *         example: '2026-05-25'
+ *     responses:
+ *       200:
+ *         description: Resultados de encuestas y promedio NPS del periodo
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 promedio:
+ *                   type: number
+ *                   format: float
+ *                   example: 4.67
+ *                   description: Promedio de calificación numérica del periodo (null si no hay votos)
+ *                 totalRespuestas:
+ *                   type: integer
+ *                   example: 3
+ *                   description: Cantidad total de encuestas en el periodo
+ *                 respuestas:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       timestamp:
+ *                         type: string
+ *                         format: date-time
+ *                       nombre:
+ *                         type: string
+ *                       apellido:
+ *                         type: string
+ *                       lavado:
+ *                         type: string
+ *                       fecha:
+ *                         type: string
+ *                       hora:
+ *                         type: string
+ *                       calificacion:
+ *                         type: string
+ *                       valor:
+ *                         type: integer
+ *                       messageId:
+ *                         type: string
+ */
+app.get("/encuesta/resultados", async (req, res) => {
+  try {
+    const { desde, hasta } = req.query;
+
+    if (!SHEETS_URL) {
+      return res.status(500).json({
+        success: false,
+        message: "Google Sheets URL no configurada en las variables de entorno"
+      });
+    }
+
+    // Realizar la consulta GET a la misma URL de Google Sheets
+    const response = await axios.get(SHEETS_URL, {
+      timeout: 10000 // 10 segundos de timeout
+    });
+
+    let resultados = response.data;
+
+    // Asegurarse de que resultados es un array
+    if (!Array.isArray(resultados)) {
+      return res.status(500).json({
+        success: false,
+        message: "Respuesta inválida de Google Sheets. Se esperaba un array."
+      });
+    }
+
+    // Validar formato de parámetro "desde" si se envía
+    if (desde) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(desde)) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "El parámetro 'desde' debe tener el formato YYYY-MM-DD" 
+        });
+      }
+      resultados = resultados.filter(r => {
+        const normalized = normalizarFechaYYYYMMDD(r.fecha);
+        return normalized >= desde;
+      });
+    }
+
+    // Validar formato de parámetro "hasta" si se envía
+    if (hasta) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(hasta)) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "El parámetro 'hasta' debe tener el formato YYYY-MM-DD" 
+        });
+      }
+      resultados = resultados.filter(r => {
+        const normalized = normalizarFechaYYYYMMDD(r.fecha);
+        return normalized <= hasta;
+      });
+    }
+
+    // Mapear resultados para agregar su valor numérico
+    const respuestasMapeadas = resultados.map(r => {
+      return {
+        ...r,
+        valor: obtenerValorNumerico(r.calificacion)
+      };
+    });
+
+    // Ordenar cronológicamente por la fecha y hora del turno (Columna E y Columna F de Google Sheets)
+    respuestasMapeadas.sort((a, b) => {
+      const dateA = parseFechaHora(a.fecha, a.hora);
+      const dateB = parseFechaHora(b.fecha, b.hora);
+      return dateA.getTime() - dateB.getTime();
+    });
+
+    // Calcular promedio
+    const respuestasConValor = respuestasMapeadas.filter(r => r.valor !== null);
+    const totalConValor = respuestasConValor.length;
+    let promedio = null;
+
+    if (totalConValor > 0) {
+      const suma = respuestasConValor.reduce((acc, r) => acc + r.valor, 0);
+      promedio = parseFloat((suma / totalConValor).toFixed(2));
+    }
+
+    res.json({
+      promedio: promedio,
+      totalRespuestas: respuestasMapeadas.length,
+      respuestas: respuestasMapeadas
+    });
+  } catch (error) {
+    console.error("Error obteniendo resultados de Google Sheets:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Error al comunicarse con Google Sheets", 
+      error: error.message 
+    });
+  }
+});
+
 // Validaciones de seguridad en producción
 if (process.env.NODE_ENV === 'production') {
-    // Verificar secretos requeridos
-    const requiredSecrets = [
-        'API_KEY_SECRET',
-        'WHATSAPP_WEBHOOK_KEY',
-        'NOTIFICATIONS_KEY',
-        'WAAPI_INSTANCE_ID',
-        'WAAPI_TOKEN'
-    ];
+  // Verificar secretos requeridos
+  const requiredSecrets = [
+    'API_KEY_SECRET',
+    'WHATSAPP_WEBHOOK_KEY',
+    'NOTIFICATIONS_KEY',
+    'WAAPI_INSTANCE_ID',
+    'WAAPI_TOKEN'
+  ];
 
-    const missingSecrets = requiredSecrets.filter(secret => !process.env[secret]);
-    
-    if (missingSecrets.length > 0) {
-        console.error('❌ Error: Faltan las siguientes variables de entorno requeridas:');
-        missingSecrets.forEach(secret => console.error(`   - ${secret}`));
-        process.exit(1);
-    }
+  const missingSecrets = requiredSecrets.filter(secret => !process.env[secret]);
+
+  if (missingSecrets.length > 0) {
+    console.error('❌ Error: Faltan las siguientes variables de entorno requeridas:');
+    missingSecrets.forEach(secret => console.error(`   - ${secret}`));
+    process.exit(1);
+  }
 }
 
 /**
@@ -1295,7 +1512,7 @@ if (process.env.NODE_ENV === 'production') {
 app.post('/dev/generate-key', async (req, res) => {
   try {
     const { name, test = false } = req.body;
-    
+
     if (!name) {
       logError400(req, 'El nombre es requerido para generar API key', req.body);
       return res.status(400).json({
@@ -1306,7 +1523,7 @@ app.post('/dev/generate-key', async (req, res) => {
 
     const apiKey = generateApiKey(test, name);
     const keyConfig = await registerApiKey(apiKey, name, test);
-    
+
     res.json({
       apiKey,
       type: getKeyType(apiKey),
@@ -1374,7 +1591,7 @@ app.delete('/dev/delete-key/:apiKey', async (req, res) => {
   try {
     const { apiKey } = req.params;
     const deleted = await deleteApiKey(apiKey);
-    
+
     if (deleted) {
       res.json({
         success: true,

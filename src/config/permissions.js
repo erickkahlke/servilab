@@ -23,7 +23,7 @@ const PERMISSIONS = {
     },
     'surveys:read': {
         description: 'Leer resultados de encuestas',
-        endpoints: ['/debug/pendientes']
+        endpoints: ['/debug/pendientes', '/encuesta/resultados']
     },
     'surveys:all': {
         description: 'Acceso completo a encuestas',

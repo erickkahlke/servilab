@@ -21,6 +21,36 @@ const generateApiKey = (isTest = false, name = '') => {
   return `${prefix}${uuid}_${suffix}`;
 };
 
+const getApiKeyConfig = async (apiKey) => {
+  if (apiKey === MASTER_API_KEY) {
+    return {
+      name: 'Master API Key',
+      type: 'master',
+      role: 'admin',
+      permissions: ['*'],
+      createdAt: '2024-01-01T00:00:00.000Z'
+    };
+  }
+
+  // Verificar si existe en el registro persistido
+  const keys = await listApiKeys();
+  if (keys[apiKey]) {
+    return keys[apiKey];
+  }
+
+  // Verificar si existe en los estáticos de src/config/keys.js
+  try {
+    const { API_KEYS } = require('../config/keys');
+    if (API_KEYS && API_KEYS[apiKey]) {
+      return API_KEYS[apiKey];
+    }
+  } catch (e) {
+    // Ignorar si no se puede cargar
+  }
+
+  return null;
+};
+
 const validateApiKey = async (apiKey) => {
   // La master key siempre es válida
   if (apiKey === MASTER_API_KEY) {
@@ -37,9 +67,9 @@ const validateApiKey = async (apiKey) => {
     return false;
   }
 
-  // Verificar si existe en el registro
-  const keys = await listApiKeys();
-  return !!keys[apiKey];
+  // Verificar si existe en el registro o estáticos
+  const config = await getApiKeyConfig(apiKey);
+  return !!config;
 };
 
 const isMasterKey = (apiKey) => {
@@ -114,6 +144,7 @@ const deleteApiKey = async (apiKey) => {
 module.exports = {
   generateApiKey,
   validateApiKey,
+  getApiKeyConfig,
   isMasterKey,
   getKeyType,
   registerApiKey,
