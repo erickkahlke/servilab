@@ -436,7 +436,7 @@ async function inicializarAlertasPendientes() {
                     `Un cliente ha finalizado su encuesta con una calificación baja:\n\n` +
                     `• *Cliente:* ${cliente}\n` +
                     `• *Teléfono:* +${telefonoCliente}\n` +
-                    `• *Fecha/Hora Turno:* ${pollInfo.fecha || ""} ${pollInfo.hora || ""}\n` +
+                    `• *Fecha/Hora Turno:* ${pollInfo.fecha || ""} ${pollInfo.hora || ""}hs\n` +
                     `• *Calificación:* ${currentData.calificacion} (${valorNumerico}/5)\n\n` +
                     `👉 *Acción recomendada:* Contactar al cliente para entender su disconformidad.\n\n` +
                     `🤖 Enviado automaticamente`;
@@ -571,7 +571,7 @@ async function analizarEncuesta(vote) {
           `Un cliente ha finalizado su encuesta con una calificación baja:\n\n` +
           `• *Cliente:* ${cliente}\n` +
           `• *Teléfono:* +${telefonoCliente}\n` +
-          `• *Fecha/Hora Turno:* ${pollInfo.fecha || ""} ${pollInfo.hora || ""}\n` +
+          `• *Fecha/Hora Turno:* ${pollInfo.fecha || ""} ${pollInfo.hora || ""}hs\n` +
           `• *Calificación:* ${voteData.calificacion} (${valorNumerico}/5)\n\n` +
           `👉 *Acción recomendada:* Contactar al cliente para entender su disconformidad y resolver el inconveniente.\n\n` +
           `🤖 Enviado automaticamente`;
