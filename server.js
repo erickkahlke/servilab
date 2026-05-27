@@ -4,6 +4,7 @@ const axios = require("axios");
 const crypto = require("crypto");
 const app = express();
 const persist = require("node-persist");
+const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
 const prodEnvPath = "/var/www/html/servilab/.env";
@@ -399,6 +400,24 @@ const SHEETS_URL = process.env.SHEETS_URL;
 // Registro en memoria de temporizadores de alertas de disconformidad activos
 const activeAlertTimeouts = {};
 
+// Función helper para obtener el mensaje de agradecimiento personalizado
+function obtenerMensajeAgradecimiento(opcion) {
+  if (!opcion || typeof opcion !== 'string') {
+    return "¡Gracias por tu opinión! Nos ayuda a seguir mejorando 🙌";
+  }
+  const textoOpcion = opcion.toLowerCase();
+  if (textoOpcion.includes("excelente")) {
+    return "¡Muchas gracias por tu calificación! 😊 Nos alegra saber que tu experiencia fue excelente. Tu opinión nos motiva a seguir brindando el mejor servicio.";
+  }
+  if (textoOpcion.includes("buena")) {
+    return "¡Gracias por tu calificación! 😊 Nos alegra saber que tu experiencia fue buena. Para seguir mejorando, ¿qué podríamos hacer para que la próxima vez sea excelente?";
+  }
+  if (textoOpcion.includes("regular") || textoOpcion.includes("mala")) {
+    return "Gracias por tu devolución. Sentimos que tu experiencia no haya sido buena 😔 Nos gustaría entender qué pasó para poder mejorarlo. ¿Podés contarnos un poco más?";
+  }
+  return "¡Gracias por tu opinión! Nos ayuda a seguir mejorando 🙌";
+}
+
 // Programar alertas pendientes tras reinicio del servidor
 async function inicializarAlertasPendientes() {
   try {
@@ -417,7 +436,7 @@ async function inicializarAlertasPendientes() {
             const parts = key.split(":");
             const voter = parts[2]; // JID del cliente (done:messageId:voter)
 
-            logger.info(`[ALERTA] ⏱️ Programando alerta pendiente tras reinicio para ${key} con delay de ${Math.round(delay / 1000)}s`);
+            logger.info(`[ALERTA] ⏱️ Programando alerta y agradecimiento pendientes tras reinicio para ${key} con delay de ${Math.round(delay / 1000)}s`);
             reprogramadasCount++;
 
             activeAlertTimeouts[key] = setTimeout(async () => {
@@ -427,6 +446,13 @@ async function inicializarAlertasPendientes() {
                 if (!currentData || !currentData.calificacion) return;
 
                 const valorNumerico = obtenerValorNumerico(currentData.calificacion);
+
+                // ── Enviar agradecimiento definitivo al cliente post-reinicio ──
+                const mensajeAgradecimiento = obtenerMensajeAgradecimiento(currentData.calificacion);
+                logger.info(`[AGRADECIMIENTO] Enviando respuesta definitiva al cliente (post-reinicio) | JID: ${voter} | Calificación: ${currentData.calificacion}`);
+                await enviarMensajeWhatsApp(voter, mensajeAgradecimiento);
+
+                // ── Enviar alerta al grupo interno si la calificación es < 4 ──
                 if (valorNumerico !== null && valorNumerico < 4) {
                   const pollInfo = currentData.poll || {};
                   const cliente = `${pollInfo.nombre} ${pollInfo.apellido || ""}`.trim();
@@ -529,12 +555,6 @@ async function analizarEncuesta(vote) {
     });
     // Eliminar de pendientes
     await persist.removeItem(`poll:${messageId}`);
-
-    // ── Enviar agradecimiento (Solo en el primer voto) ────────────────
-    await enviarMensajeWhatsApp(
-      voter,
-      "¡Gracias por tu opinión! Nos ayuda a seguir mejorando 🙌"
-    );
   } else {
     // Es una actualización dentro del rango de 5 minutos, refrescar la calificación guardada
     await persist.setItem(llaveDone, {
@@ -543,7 +563,7 @@ async function analizarEncuesta(vote) {
     });
   }
 
-  // ── Gestión de Alertas de Disconformidad (5 Minutos) ────────────────
+  // ── Gestión de Alertas y Respuestas Diferidas (5 Minutos) ──────────
   // Si ya existía un temporizador para este voto, cancelarlo (evita spam si el cliente cambia de parecer rápido)
   if (activeAlertTimeouts[llaveDone]) {
     clearTimeout(activeAlertTimeouts[llaveDone]);
@@ -560,6 +580,11 @@ async function analizarEncuesta(vote) {
       if (!voteData || !voteData.calificacion) return;
 
       const valorNumerico = obtenerValorNumerico(voteData.calificacion);
+
+      // ── Enviar agradecimiento definitivo al cliente ──────────────────
+      const mensajeAgradecimiento = obtenerMensajeAgradecimiento(voteData.calificacion);
+      logger.info(`[AGRADECIMIENTO] Enviando respuesta definitiva al cliente | JID: ${voter} | Calificación: ${voteData.calificacion}`);
+      await enviarMensajeWhatsApp(voter, mensajeAgradecimiento);
 
       // Si la calificación definitiva es menor a 4 (Buena) -> es decir, Regular (3) o Mala (1)
       if (valorNumerico !== null && valorNumerico < 4) {
@@ -586,7 +611,7 @@ async function analizarEncuesta(vote) {
         );
       }
     } catch (err) {
-      console.error("Error al procesar alerta de cliente disconforme:", err);
+      console.error("Error al procesar evaluación definitiva de encuesta:", err);
     }
   }, 5 * 60 * 1000); // 5 minutos
 
@@ -1585,89 +1610,183 @@ const parseFechaHora = (fechaStr, horaStr) => {
  *                       messageId:
  *                         type: string
  */
+// Función helper para generar una barra horizontal simétrica de 10 bloques de emojis
+function generarBarraEmoji(porcentaje, emojiColor) {
+  const pct = Math.min(100, Math.max(0, porcentaje || 0));
+  let bloquesColor = Math.round(pct / 10);
+  // Asegurarnos de que si hay porcentaje > 0, se muestre al menos 1 bloque del color
+  if (pct > 0 && bloquesColor === 0) {
+    bloquesColor = 1;
+  }
+  const bloquesVacios = 10 - bloquesColor;
+  return `${emojiColor.repeat(bloquesColor)}${"⬜️".repeat(bloquesVacios)}`;
+}
+
+// Helper común para extraer y procesar encuestas de Google Sheets
+async function obtenerEstadisticasEncuestas(desde, hasta) {
+  if (!SHEETS_URL) {
+    throw new Error("Google Sheets URL no configurada en las variables de entorno");
+  }
+
+  const response = await axios.get(SHEETS_URL, { timeout: 10000 });
+  let resultados = response.data;
+
+  if (!Array.isArray(resultados)) {
+    throw new Error("Respuesta inválida de Google Sheets. Se esperaba un array.");
+  }
+
+  // Filtrar por fecha "desde" si se envía
+  if (desde) {
+    resultados = resultados.filter(r => {
+      const normalized = normalizarFechaYYYYMMDD(r.fecha);
+      return normalized >= desde;
+    });
+  }
+
+  // Filtrar por fecha "hasta" si se envía
+  if (hasta) {
+    resultados = resultados.filter(r => {
+      const normalized = normalizarFechaYYYYMMDD(r.fecha);
+      return normalized <= hasta;
+    });
+  }
+
+  // Mapear valor numérico y contar
+  let suma = 0;
+  let totalConValor = 0;
+  let cantExcelente = 0;
+  let cantBuena = 0;
+  let cantRegular = 0;
+  let cantMala = 0;
+
+  const respuestasMapeadas = resultados.map(r => {
+    const valor = obtenerValorNumerico(r.calificacion);
+    if (valor !== null) {
+      suma += valor;
+      totalConValor++;
+      if (valor === 5) cantExcelente++;
+      else if (valor === 4) cantBuena++;
+      else if (valor === 3) cantRegular++;
+      else if (valor === 1) cantMala++;
+    }
+    return { ...r, valor };
+  });
+
+  // Ordenar cronológicamente por la fecha y hora del turno
+  respuestasMapeadas.sort((a, b) => {
+    const dateA = parseFechaHora(a.fecha, a.hora);
+    const dateB = parseFechaHora(b.fecha, b.hora);
+    return dateA.getTime() - dateB.getTime();
+  });
+
+  const promedio = totalConValor > 0 ? parseFloat((suma / totalConValor).toFixed(2)) : null;
+
+  return {
+    promedio,
+    totalRespuestas: respuestasMapeadas.length,
+    respuestas: respuestasMapeadas,
+    detalles: {
+      excelente: { cant: cantExcelente, porc: respuestasMapeadas.length > 0 ? Math.round((cantExcelente / respuestasMapeadas.length) * 100) : 0 },
+      buena: { cant: cantBuena, porc: respuestasMapeadas.length > 0 ? Math.round((cantBuena / respuestasMapeadas.length) * 100) : 0 },
+      regular: { cant: cantRegular, porc: respuestasMapeadas.length > 0 ? Math.round((cantRegular / respuestasMapeadas.length) * 100) : 0 },
+      mala: { cant: cantMala, porc: respuestasMapeadas.length > 0 ? Math.round((cantMala / respuestasMapeadas.length) * 100) : 0 }
+    }
+  };
+}
+
+/**
+ * @swagger
+ * /encuesta/resultados:
+ *   get:
+ *     summary: Obtiene los resultados de las encuestas en tiempo real con estadísticas y promedio NPS
+ *     description: Consulta en tiempo real la planilla de Google Sheets, aplica filtros de fecha YYYY-MM-DD, ordena cronológicamente por la fecha y hora del turno, y calcula la calificación promedio para el periodo seleccionado. Requiere API key autorizada.
+ *     tags: [Encuestas]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: desde
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Fecha de inicio de periodo (YYYY-MM-DD, inclusiva)
+ *         example: '2026-05-01'
+ *       - in: query
+ *         name: hasta
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Fecha de fin de periodo (YYYY-MM-DD, inclusiva)
+ *         example: '2026-05-25'
+ *     responses:
+ *       200:
+ *         description: Resultados de encuestas y promedio NPS del periodo
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 promedio:
+ *                   type: number
+ *                   format: float
+ *                   example: 4.67
+ *                   description: Promedio de calificación numérica del periodo (null si no hay votos)
+ *                 totalRespuestas:
+ *                   type: integer
+ *                   example: 3
+ *                   description: Cantidad total de encuestas en el periodo
+ *                 respuestas:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       timestamp:
+ *                         type: string
+ *                         format: date-time
+ *                       nombre:
+ *                         type: string
+ *                       apellido:
+ *                         type: string
+ *                       lavado:
+ *                         type: string
+ *                       fecha:
+ *                         type: string
+ *                       hora:
+ *                         type: string
+ *                       calificacion:
+ *                         type: string
+ *                       valor:
+ *                         type: integer
+ *                       messageId:
+ *                         type: string
+ */
 app.get("/encuesta/resultados", async (req, res) => {
   try {
     const { desde, hasta } = req.query;
 
-    if (!SHEETS_URL) {
-      return res.status(500).json({
-        success: false,
-        message: "Google Sheets URL no configurada en las variables de entorno"
-      });
-    }
-
-    // Realizar la consulta GET a la misma URL de Google Sheets
-    const response = await axios.get(SHEETS_URL, {
-      timeout: 10000 // 10 segundos de timeout
-    });
-
-    let resultados = response.data;
-
-    // Asegurarse de que resultados es un array
-    if (!Array.isArray(resultados)) {
-      return res.status(500).json({
-        success: false,
-        message: "Respuesta inválida de Google Sheets. Se esperaba un array."
-      });
-    }
-
     // Validar formato de parámetro "desde" si se envía
-    if (desde) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(desde)) {
-        return res.status(400).json({
-          success: false,
-          message: "El parámetro 'desde' debe tener el formato YYYY-MM-DD"
-        });
-      }
-      resultados = resultados.filter(r => {
-        const normalized = normalizarFechaYYYYMMDD(r.fecha);
-        return normalized >= desde;
+    if (desde && !/^\d{4}-\d{2}-\d{2}$/.test(desde)) {
+      return res.status(400).json({
+        success: false,
+        message: "El parámetro 'desde' debe tener el formato YYYY-MM-DD"
       });
     }
 
     // Validar formato de parámetro "hasta" si se envía
-    if (hasta) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(hasta)) {
-        return res.status(400).json({
-          success: false,
-          message: "El parámetro 'hasta' debe tener el formato YYYY-MM-DD"
-        });
-      }
-      resultados = resultados.filter(r => {
-        const normalized = normalizarFechaYYYYMMDD(r.fecha);
-        return normalized <= hasta;
+    if (hasta && !/^\d{4}-\d{2}-\d{2}$/.test(hasta)) {
+      return res.status(400).json({
+        success: false,
+        message: "El parámetro 'hasta' debe tener el formato YYYY-MM-DD"
       });
     }
 
-    // Mapear resultados para agregar su valor numérico
-    const respuestasMapeadas = resultados.map(r => {
-      return {
-        ...r,
-        valor: obtenerValorNumerico(r.calificacion)
-      };
-    });
-
-    // Ordenar cronológicamente por la fecha y hora del turno (Columna E y Columna F de Google Sheets)
-    respuestasMapeadas.sort((a, b) => {
-      const dateA = parseFechaHora(a.fecha, a.hora);
-      const dateB = parseFechaHora(b.fecha, b.hora);
-      return dateA.getTime() - dateB.getTime();
-    });
-
-    // Calcular promedio
-    const respuestasConValor = respuestasMapeadas.filter(r => r.valor !== null);
-    const totalConValor = respuestasConValor.length;
-    let promedio = null;
-
-    if (totalConValor > 0) {
-      const suma = respuestasConValor.reduce((acc, r) => acc + r.valor, 0);
-      promedio = parseFloat((suma / totalConValor).toFixed(2));
-    }
+    // Obtener estadísticas y respuestas a través del helper común
+    const stats = await obtenerEstadisticasEncuestas(desde, hasta);
 
     res.json({
-      promedio: promedio,
-      totalRespuestas: respuestasMapeadas.length,
-      respuestas: respuestasMapeadas
+      promedio: stats.promedio,
+      totalRespuestas: stats.totalRespuestas,
+      respuestas: stats.respuestas
     });
   } catch (error) {
     console.error("Error obteniendo resultados de Google Sheets:", error);
@@ -1676,6 +1795,72 @@ app.get("/encuesta/resultados", async (req, res) => {
       message: "Error al comunicarse con Google Sheets",
       error: error.message
     });
+  }
+});
+
+// Tarea Programada Diaria: Envío automático del reporte NPS a las 13:30hs
+cron.schedule('30 13 * * *', async () => {
+  logger.info("⏱️ [CRON] Iniciando generación automática del reporte NPS diario...");
+  
+  try {
+    // 1. Calcular la fecha de ayer (YYYY-MM-DD)
+    const hoy = new Date();
+    const ayer = new Date(hoy.getTime() - 24 * 60 * 60 * 1000);
+    const y = ayer.getFullYear();
+    const m = String(ayer.getMonth() + 1).padStart(2, '0');
+    const d = String(ayer.getDate()).padStart(2, '0');
+    const fechaAyer = `${y}-${m}-${d}`;
+
+    logger.info(`[CRON] Consultando encuestas de la fecha de ayer: ${fechaAyer}`);
+
+    // 2. Extraer métricas de ayer
+    const stats = await obtenerEstadisticasEncuestas(fechaAyer, fechaAyer);
+
+    // 3. Dar formato al mensaje exacto solicitado
+    const total = stats.totalRespuestas;
+    const promedioStr = stats.promedio !== null ? `${stats.promedio.toFixed(2)} / 5.00` : "-";
+    
+    let mensajeReporte = 
+      `📊 *REPORTE NPS*\n` +
+      `Periodo: ${fechaAyer} al ${fechaAyer}\n\n` +
+      `Promedio NPS: ${promedioStr} ⭐️ (${total} Respuestas)\n\n`;
+
+    if (total > 0) {
+      const ex = stats.detalles.excelente;
+      const bu = stats.detalles.buena;
+      const re = stats.detalles.regular;
+      const ma = stats.detalles.mala;
+
+      mensajeReporte +=
+        `${generarBarraEmoji(ex.porc, "🟩")} ${ex.porc}% (${ex.cant})\n` +
+        `${generarBarraEmoji(bu.porc, "🟦")} ${bu.porc}% (${bu.cant})\n` +
+        `${generarBarraEmoji(re.porc, "🟧")} ${re.porc}% (${re.cant})\n` +
+        `${generarBarraEmoji(ma.porc, "🟥")} ${ma.porc}% (${ma.cant})\n\n`;
+    } else {
+      mensajeReporte +=
+        `${generarBarraEmoji(0, "🟩")} 0% (0)\n` +
+        `${generarBarraEmoji(0, "🟦")} 0% (0)\n` +
+        `${generarBarraEmoji(0, "🟧")} 0% (0)\n` +
+        `${generarBarraEmoji(0, "🟥")} 0% (0)\n\n` +
+        `_(Ayer no se registraron encuestas completadas)_\n\n`;
+    }
+
+    mensajeReporte += `🤖 Mensaje enviado automaticamente`;
+
+    // 4. Enviar reporte al grupo interno corporativo
+    const grupoJid = "120363206309706318@g.us";
+    logger.info(`[CRON] Enviando reporte diario al grupo corporativo...`);
+    
+    await enviarMensajeWhatsApp(
+      grupoJid,
+      mensajeReporte,
+      0,
+      `cron-nps-${Date.now()}`
+    );
+    
+    logger.info(`[CRON] ✅ Reporte NPS diario enviado exitosamente.`);
+  } catch (error) {
+    logger.error(`[CRON] ❌ Error generando/enviando el reporte NPS diario: ${error.message}`);
   }
 });
 
