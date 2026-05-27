@@ -1291,7 +1291,7 @@ app.post("/enviar-encuesta", async (req, res) => {
     // 2) Definir la encuesta
     const pollBody = {
       chatId,
-      caption: "¿Cómo calificarías tu experiencia de hoy? 🧽",
+      caption: "¿Cómo calificas tu última experiencia con nosotros? 🧽",
       options: ["Excelente ⭐️", "Buena 👍", "Regular 😕", "Mala 👎"],
       multipleAnswers: false,
     };
