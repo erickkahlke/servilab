@@ -529,9 +529,9 @@ async function ejecutarEnvioEncuesta(datosPoll) {
   }
 
   let messageId =
-    resp.data?.data?.data?.id?.id || 
-    resp.data?.data?.id?.id || 
-    (resp.data?.data?.data?.id?._serialized 
+    resp.data?.data?.data?.id?.id ||
+    resp.data?.data?.id?.id ||
+    (resp.data?.data?.data?.id?._serialized
       ? resp.data.data.data.id._serialized.split("_")[2]
       : null);
 
@@ -550,7 +550,7 @@ async function ejecutarEnvioEncuesta(datosPoll) {
 
   logMensajeEnviado("Encuesta de satisfacción", chatId, `${nombre} ${apellido || ""}`, telNorm);
   logger.info(`[ENCUESTA] ✅ Encuesta enviada físicamente con éxito. messageId: ${messageId}`);
-  
+
   return messageId;
 }
 
@@ -589,7 +589,7 @@ async function inicializarEncuestasDiferidas() {
             // Enviar inmediatamente para no perder la encuesta.
             logger.info(`[DIFERIDO] ⚡ El tiempo programado para ${key} ya pasó. Enviando inmediatamente.`);
             enviadasInmediatasCount++;
-            
+
             // Enviar en background
             (async () => {
               try {
@@ -603,7 +603,7 @@ async function inicializarEncuestasDiferidas() {
         }
       }
     }
-    
+
     if (reprogramadasCount > 0 || enviadasInmediatasCount > 0) {
       logger.info(`[DIFERIDO] Inicialización finalizada: ${reprogramadasCount} reprogramadas, ${enviadasInmediatasCount} enviadas de inmediato.`);
     }
@@ -1256,7 +1256,7 @@ app.post("/notificacion/lavado-completado", async (req, res) => {
 
     logger.info(`[${requestId}] Procesando envío | telefono: ${telefono} → normalizado: ${telefonoNormalizado} → chatId: ${chatId}`);
 
-    const message = `${customer_first_name}, tu vehículo está listo 🚗✨\nTe recordamos que estamos abiertos de 10 a 13.30hs y de 16 a 20.30hs\n\n🤖 Mensaje automático. No requiere respuesta.`;
+    const message = `${customer_first_name}, tu vehículo está listo 🚗✨\n\n🤖 Mensaje automático. No requiere respuesta.`;
 
     const result = await enviarMensajeWhatsApp(chatId, message, 0, requestId);
 
@@ -1916,7 +1916,7 @@ app.get("/encuesta/resultados", async (req, res) => {
 // Tarea Programada Diaria: Envío automático del reporte NPS a las 13:30hs
 cron.schedule('30 13 * * *', async () => {
   logger.info("⏱️ [CRON] Iniciando generación automática del reporte NPS diario...");
-  
+
   try {
     // 1. Calcular la fecha de ayer (YYYY-MM-DD)
     const hoy = new Date();
@@ -1934,8 +1934,8 @@ cron.schedule('30 13 * * *', async () => {
     // 3. Dar formato al mensaje exacto solicitado
     const total = stats.totalRespuestas;
     const promedioStr = stats.promedio !== null ? `${stats.promedio.toFixed(2)} / 5.00` : "-";
-    
-    let mensajeReporte = 
+
+    let mensajeReporte =
       `📊 *REPORTE NPS*\n` +
       `Periodo: ${fechaAyer} al ${fechaAyer}\n\n` +
       `Promedio NPS: ${promedioStr} ⭐️ (${total} Respuestas)\n\n`;
@@ -1965,14 +1965,14 @@ cron.schedule('30 13 * * *', async () => {
     // 4. Enviar reporte al grupo interno corporativo
     const grupoJid = "120363206309706318@g.us";
     logger.info(`[CRON] Enviando reporte diario al grupo corporativo...`);
-    
+
     await enviarMensajeWhatsApp(
       grupoJid,
       mensajeReporte,
       0,
       `cron-nps-${Date.now()}`
     );
-    
+
     logger.info(`[CRON] ✅ Reporte NPS diario enviado exitosamente.`);
   } catch (error) {
     logger.error(`[CRON] ❌ Error generando/enviando el reporte NPS diario: ${error.message}`);
