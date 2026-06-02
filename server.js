@@ -1018,8 +1018,8 @@ app.post("/notificacion/seguro-lluvia", async (req, res) => {
 
     const message =
       `Tu seguro de lluvia está ACTIVADO ☂️ ✅\n\n` +
-      `La protección incluida en tu SuperLavado te permite volver a lavar tu vehículo sin cargo dentro los próximos 3 días 🙌\n` +
-      `Reserva turno en nuestra web e ingresa este código en el paso del pago: *${cupon}*\n` +
+      `La protección incluida en tu SuperLavado te permite volver a lavar tu vehículo sin cargo 🙌\n` +
+      `Reservá turno en nuestra web e ingresá este código en el paso del pago: *${cupon}*\n` +
       `http://turnos.servilab.ar\n\n` +
       `🗓️(Recordá que no es transferible y tiene validez hasta el ${fechaValidoHasta})`;
 
