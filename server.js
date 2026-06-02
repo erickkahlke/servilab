@@ -223,6 +223,8 @@ app.use((req, res, next) => {
   console.log("Almacenamiento persistente inicializado");
   // Inicializar alertas de disconformidad pendientes tras reinicio del servidor
   await inicializarAlertasPendientes();
+  // Inicializar encuestas diferidas
+  await inicializarEncuestasDiferidas();
 })();
 
 // Configuración de WhatsApp API
@@ -400,6 +402,9 @@ const SHEETS_URL = process.env.SHEETS_URL;
 // Registro en memoria de temporizadores de alertas de disconformidad activos
 const activeAlertTimeouts = {};
 
+// Registro en memoria de temporizadores de encuestas diferidas activos
+const activeSurveyTimeouts = {};
+
 // Función helper para obtener el mensaje de agradecimiento personalizado
 function obtenerMensajeAgradecimiento(opcion) {
   if (!opcion || typeof opcion !== 'string') {
@@ -489,6 +494,121 @@ async function inicializarAlertasPendientes() {
     }
   } catch (err) {
     console.error("Error al inicializar alertas de disconformidad pendientes:", err);
+  }
+}
+
+// Helper unificado para el envío físico de la encuesta por WaAPI
+async function ejecutarEnvioEncuesta(datosPoll) {
+  const { telefono, nombre, apellido, lavado, appointment_start_date, appointment_start_time } = datosPoll;
+  const telNorm = normalizarTelefono(telefono);
+  const chatId = `${telNorm.replace("+", "")}@c.us`;
+
+  const pollBody = {
+    chatId,
+    caption: "¿Cómo calificas tu última experiencia con nosotros? 🧽",
+    options: ["Excelente ⭐️", "Buena 👍", "Regular 😕", "Mala 👎"],
+    multipleAnswers: false,
+  };
+
+  logger.info(`[ENCUESTA] Enviando create-poll físico a WaAPI para ${chatId}`);
+
+  const resp = await axios.post(
+    `https://waapi.app/api/v1/instances/${process.env.WAAPI_INSTANCE_ID}/client/action/create-poll`,
+    pollBody,
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.WAAPI_TOKEN}`,
+        Host: "waapi.app",
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  if (resp.data?.status !== "success") {
+    throw new Error("WaAPI devolvió un estado distinto de success");
+  }
+
+  let messageId =
+    resp.data?.data?.data?.id?.id || 
+    resp.data?.data?.id?.id || 
+    (resp.data?.data?.data?.id?._serialized 
+      ? resp.data.data.data.id._serialized.split("_")[2]
+      : null);
+
+  if (!messageId) throw new Error("No se pudo obtener messageId de la respuesta de WaAPI");
+
+  // Guardar en persistencia local el poll pendiente para cuando vote el usuario
+  await persist.setItem(`poll:${messageId}`, {
+    nombre,
+    apellido,
+    lavado,
+    fecha: appointment_start_date,
+    hora: appointment_start_time,
+    telefono: telNorm,
+    createdAt: Date.now(),
+  });
+
+  logMensajeEnviado("Encuesta de satisfacción", chatId, `${nombre} ${apellido || ""}`, telNorm);
+  logger.info(`[ENCUESTA] ✅ Encuesta enviada físicamente con éxito. messageId: ${messageId}`);
+  
+  return messageId;
+}
+
+// Reprogramar encuestas diferidas pendientes tras reinicio del servidor
+async function inicializarEncuestasDiferidas() {
+  try {
+    const keys = await persist.keys();
+    const now = Date.now();
+    let reprogramadasCount = 0;
+    let enviadasInmediatasCount = 0;
+
+    for (const key of keys) {
+      if (key.startsWith("delayed_poll:")) {
+        const delayedData = await persist.getItem(key);
+        if (delayedData && delayedData.sendAt && delayedData.pollData) {
+          const delay = delayedData.sendAt - now;
+
+          if (delay > 0) {
+            // Caso 1: La encuesta aún debe esperar. Reprogramar.
+            logger.info(`[DIFERIDO] ⏱️ Reprogramando envío de encuesta para ${key} con delay de ${Math.round(delay / 1000)}s`);
+            reprogramadasCount++;
+
+            activeSurveyTimeouts[key] = setTimeout(async () => {
+              try {
+                delete activeSurveyTimeouts[key];
+                // Ejecutar envío
+                await ejecutarEnvioEncuesta(delayedData.pollData);
+                // Limpiar de persistencia
+                await persist.removeItem(key);
+              } catch (err) {
+                logger.error(`[DIFERIDO] Error enviando encuesta diferida tras timeout reprogramado: ${err.message}`);
+              }
+            }, delay);
+          } else {
+            // Caso 2: El tiempo de espera ya transcurrió mientras el servidor estaba offline.
+            // Enviar inmediatamente para no perder la encuesta.
+            logger.info(`[DIFERIDO] ⚡ El tiempo programado para ${key} ya pasó. Enviando inmediatamente.`);
+            enviadasInmediatasCount++;
+            
+            // Enviar en background
+            (async () => {
+              try {
+                await ejecutarEnvioEncuesta(delayedData.pollData);
+                await persist.removeItem(key);
+              } catch (err) {
+                logger.error(`[DIFERIDO] Error enviando encuesta diferida vencida: ${err.message}`);
+              }
+            })();
+          }
+        }
+      }
+    }
+    
+    if (reprogramadasCount > 0 || enviadasInmediatasCount > 0) {
+      logger.info(`[DIFERIDO] Inicialización finalizada: ${reprogramadasCount} reprogramadas, ${enviadasInmediatasCount} enviadas de inmediato.`);
+    }
+  } catch (err) {
+    logger.error("Error al inicializar encuestas diferidas pendientes:", err);
   }
 }
 
@@ -1292,6 +1412,7 @@ app.post("/enviar-encuesta", async (req, res) => {
     lavado,
     appointment_start_date,
     appointment_start_time,
+    delay
   } = req.body;
 
   // ── Validación mínima ───────────────────────────────────────────
@@ -1308,65 +1429,59 @@ app.post("/enviar-encuesta", async (req, res) => {
       .json({ success: false, message: "Faltan datos requeridos" });
   }
 
+  const delayMinutes = parseInt(delay, 10);
+  const datosPoll = {
+    telefono,
+    nombre,
+    apellido,
+    lavado,
+    appointment_start_date,
+    appointment_start_time
+  };
+
   try {
-    // 1) chatId normalizado
-    const telNorm = normalizarTelefono(telefono);
-    const chatId = `${telNorm.replace("+", "")}@c.us`;
-
-    // 2) Definir la encuesta
-    const pollBody = {
-      chatId,
-      caption: "¿Cómo calificas tu última experiencia con nosotros? 🧽",
-      options: ["Excelente ⭐️", "Buena 👍", "Regular 😕", "Mala 👎"],
-      multipleAnswers: false,
-    };
-
-    console.log("→ Enviando create-poll a WaAPI", pollBody); // LOG 1
-
-    // 3) Llamada a WaAPI
-    const resp = await axios.post(
-      `https://waapi.app/api/v1/instances/${process.env.WAAPI_INSTANCE_ID}/client/action/create-poll`,
-      pollBody,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WAAPI_TOKEN}`,
-          Host: "waapi.app",
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    if (resp.data?.status !== "success") {
-      throw new Error("WaAPI devolvió un estado distinto de success");
+    // Escenario 1: Envío instantáneo (Sin delay o delay <= 0)
+    if (isNaN(delayMinutes) || delayMinutes <= 0) {
+      const messageId = await ejecutarEnvioEncuesta(datosPoll);
+      return res.status(200).json({ success: true, messageId });
     }
 
-    // 4) Extraer messageId (tres variantes)
-    let messageId =
-      resp.data?.data?.data?.id?.id || // ← estructura actual
-      resp.data?.data?.id?.id || // backup: estructura anterior
-      (resp.data?.data?.data?.id?._serialized // backup: usando _serialized
-        ? resp.data.data.data.id._serialized.split("_")[2]
-        : null);
+    // Escenario 2: Envío diferido (delay > 0)
+    const delayMs = delayMinutes * 60 * 1000;
+    const sendAt = Date.now() + delayMs;
+    const { v4: uuidv4 } = require('uuid');
+    const delayedKey = `delayed_poll:${uuidv4()}`;
 
-    if (!messageId) throw new Error("No se encontró messageId; revisá el log");
+    logger.info(`[ENCUESTA] Programando envío diferido | Delay: ${delayMinutes} min | Destino: ${telefono}`);
 
-    // 5) Guardar pendiente
-    await persist.setItem(`poll:${messageId}`, {
-      nombre,
-      apellido,
-      lavado,
-      fecha: appointment_start_date,
-      hora: appointment_start_time,
-      telefono: telNorm, // ← Guardamos el teléfono normalizado del cliente
-      createdAt: Date.now(),
+    // Guardar en persistencia para resiliencia ante reinicios
+    await persist.setItem(delayedKey, {
+      pollData: datosPoll,
+      sendAt
     });
 
-    logMensajeEnviado("Encuesta de satisfacción", chatId, `${nombre} ${apellido || ""}`, telNorm);
-    console.log(`    Detalles: turno ${appointment_start_date} ${appointment_start_time} | ID: ${messageId}`);
+    // Programar setTimeout local en memoria
+    activeSurveyTimeouts[delayedKey] = setTimeout(async () => {
+      try {
+        delete activeSurveyTimeouts[delayedKey];
+        await ejecutarEnvioEncuesta(datosPoll);
+        await persist.removeItem(delayedKey);
+      } catch (err) {
+        logger.error(`[DIFERIDO] Error enviando encuesta diferida: ${err.message}`);
+      }
+    }, delayMs);
 
-    res.status(200).json({ success: true, messageId });
+    // Responder inmediatamente indicando que se ha programado
+    return res.status(202).json({
+      success: true,
+      status: "scheduled",
+      message: `Envío de encuesta programado con un retraso de ${delayMinutes} minutos`,
+      sendAt: new Date(sendAt).toISOString(),
+      delayedKey
+    });
+
   } catch (err) {
-    console.error("Error al enviar encuesta:", err); // LOG 4
+    console.error("Error al enviar/programar encuesta:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
