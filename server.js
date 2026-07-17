@@ -616,7 +616,19 @@ async function inicializarEncuestasDiferidas() {
 async function analizarEncuesta(vote) {
   const voter = vote.voter; // JID del cliente
   const opcion = vote.selectedOptions?.[0]?.name || "—";
-  const messageId = vote.parentMessage?.id?.id; // el ID real del poll
+  
+  // Extraer messageId probando diferentes rutas debido a cambios en la API de WhatsApp
+  const messageId = 
+    vote.parentMessage?.id?.id || 
+    vote.pollCreationMessageId || 
+    vote.msgId || 
+    vote.pollCreationMessage?.id ||
+    vote.id?.id;
+
+  if (!messageId) {
+    console.error("❌ No se pudo extraer el messageId del voto. Payload de WaAPI:", JSON.stringify(vote, null, 2));
+  }
+
   const llaveDone = `done:${messageId}:${voter}`; // p/ idempotencia
 
   const firstVoteData = await persist.getItem(llaveDone);
@@ -661,8 +673,9 @@ async function analizarEncuesta(vote) {
       { headers: { "Content-Type": "application/json" } }
     );
   } catch (err) {
-    console.error("⚠️  Error subiendo a Sheets, se reintentará:", err.message);
-    return; // Retornamos sin borrar el pendiente para volver a intentar
+    console.error("⚠️  Error subiendo a Sheets. Se guardará localmente pero la planilla falló:", err.message);
+    // IMPORTANTE: Ya no hacemos 'return;' aquí para que el bot no se quede mudo. 
+    // El flujo continuará y el cliente recibirá su respuesta.
   }
 
   // ── Persistencia y Limpieza de Pendientes ─────────────────────────
