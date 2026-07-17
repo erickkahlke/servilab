@@ -535,10 +535,7 @@ async function ejecutarEnvioEncuesta(datosPoll) {
       ? resp.data.data.data.id._serialized.split("_")[2]
       : null);
 
-  if (!messageId) throw new Error("No se pudo obtener messageId de la respuesta de WaAPI");
-
-  // Guardar en persistencia local el poll pendiente para cuando vote el usuario
-  await persist.setItem(`poll:${messageId}`, {
+  const pollData = {
     nombre,
     apellido,
     lavado,
@@ -546,12 +543,23 @@ async function ejecutarEnvioEncuesta(datosPoll) {
     hora: appointment_start_time,
     telefono: telNorm,
     createdAt: Date.now(),
-  });
+  };
+
+  // Si existe el ID clásico, lo guardamos
+  if (messageId) {
+    await persist.setItem(`poll:${messageId}`, pollData);
+  }
+  
+  // NUEVO: WaAPI dejó de devolver el messageId en la respuesta. 
+  // Siempre guardamos un respaldo basado en el teléfono del cliente (chatId)
+  await persist.setItem(`pending_poll:${chatId}`, pollData);
 
   logMensajeEnviado("Encuesta de satisfacción", chatId, `${nombre} ${apellido || ""}`, telNorm);
-  logger.info(`[ENCUESTA] ✅ Encuesta enviada físicamente con éxito. messageId: ${messageId}`);
+  
+  const returnMessageId = messageId || `sent_${Date.now()}`;
+  logger.info(`[ENCUESTA] ✅ Encuesta enviada físicamente con éxito. ID Local/WaAPI: ${returnMessageId}`);
 
-  return messageId;
+  return returnMessageId;
 }
 
 // Reprogramar encuestas diferidas pendientes tras reinicio del servidor
@@ -649,10 +657,16 @@ async function analizarEncuesta(vote) {
     poll = firstVoteData.poll;
     esActualizacion = true;
   } else {
-    // Es el primer voto. Buscar la encuesta en pendientes.
+    // Es el primer voto. Buscar la encuesta en pendientes por ID.
     poll = await persist.getItem(`poll:${messageId}`);
+    
+    // Si no se encuentra por ID, intentar el fallback por número de teléfono
     if (!poll) {
-      console.warn("Voto huérfano: la encuesta no estaba pendiente", messageId);
+      poll = await persist.getItem(`pending_poll:${voter}`);
+    }
+
+    if (!poll) {
+      console.warn("Voto huérfano: la encuesta no estaba pendiente", messageId, "para", voter);
       return;
     }
   }
@@ -686,8 +700,11 @@ async function analizarEncuesta(vote) {
       poll: poll,
       calificacion: opcion
     });
-    // Eliminar de pendientes
-    await persist.removeItem(`poll:${messageId}`);
+    // Eliminar de pendientes (limpiar tanto el registro por ID como el de respaldo)
+    if (messageId) {
+      await persist.removeItem(`poll:${messageId}`);
+    }
+    await persist.removeItem(`pending_poll:${voter}`);
   } else {
     // Es una actualización dentro del rango de 5 minutos, refrescar la calificación guardada
     await persist.setItem(llaveDone, {
