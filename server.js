@@ -1576,10 +1576,17 @@ app.post(
   express.json({ limit: '10mb' }),      // evita PayloadTooLargeError
   async (req, res) => {
     const { event, data } = req.body;
+    
+    console.log(`\n🛎️ [WEBHOOK] Evento recibido de WaAPI: ${event}`);
 
     try {
-      if (event === 'vote_update' && data?.vote) {
-        await analizarEncuesta(data.vote);
+      if (event === 'vote_update') {
+        console.log(`📊 [WEBHOOK] Procesando vote_update. Payload completo de 'data':`, JSON.stringify(data, null, 2));
+        if (data?.vote) {
+          await analizarEncuesta(data.vote);
+        } else {
+          console.error(`❌ [WEBHOOK] Evento vote_update recibido pero no tiene el objeto 'data.vote' adentro.`);
+        }
       } else if ((event === 'message' || event === 'message_create') && data?.message) {
         const msg = data.message;
         // Detectar si nosotros enviamos una encuesta
