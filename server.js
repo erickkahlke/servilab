@@ -1601,12 +1601,13 @@ app.post(
             const msgId = msg.id?.id;
             
             if (chatId && msgId) {
-            // Buscar si tenemos una encuesta pendiente para este número
-            const pending = await persist.getItem(`pending_poll:${chatId}`);
-            if (pending) {
-              // Vincular el ID oficial de WhatsApp con nuestra encuesta pendiente
-              await persist.setItem(`poll:${msgId}`, pending);
-              logger.info(`[ENCUESTA] 🔗 Encuesta vinculada con el ID oficial de WhatsApp asíncronamente. chatId: ${chatId} -> messageId: ${msgId}`);
+              // Buscar si tenemos una encuesta pendiente para este número
+              const pending = await persist.getItem(`pending_poll:${chatId}`);
+              if (pending) {
+                // Vincular el ID oficial de WhatsApp con nuestra encuesta pendiente
+                await persist.setItem(`poll:${msgId}`, pending);
+                logger.info(`[ENCUESTA] 🔗 Encuesta vinculada con el ID oficial de WhatsApp asíncronamente. chatId: ${chatId} -> messageId: ${msgId}`);
+              }
             }
           }
         }
