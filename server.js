@@ -1595,18 +1595,45 @@ app.post(
         
         if (msg) {
           console.log(`[WEBHOOK] Analizando mensaje saliente: fromMe=${msg.fromMe}, type=${msg.type}`);
-          // Detectar si nosotros enviamos una encuesta
           if (msg.fromMe && msg.type === 'poll_creation') {
-            const chatId = msg.to || msg.id?.remote;
             const msgId = msg.id?.id;
             
-            if (chatId && msgId) {
-              // Buscar si tenemos una encuesta pendiente para este número
-              const pending = await persist.getItem(`pending_poll:${chatId}`);
-              if (pending) {
-                // Vincular el ID oficial de WhatsApp con nuestra encuesta pendiente
-                await persist.setItem(`poll:${msgId}`, pending);
-                logger.info(`[ENCUESTA] 🔗 Encuesta vinculada con el ID oficial de WhatsApp asíncronamente. chatId: ${chatId} -> messageId: ${msgId}`);
+            if (msgId) {
+              // WaAPI ahora usa IDs ofuscados (@lid) en los webhooks, por lo que no podemos
+              // cruzar el mensaje con el número de teléfono del cliente directamente.
+              // Solución: Usar una heurística de tiempo. Buscamos la encuesta pendiente más reciente.
+              const keys = await persist.keys();
+              const pendingKeys = keys.filter(k => k.startsWith('pending_poll:'));
+              
+              let bestMatch = null;
+              let bestDiff = Infinity;
+              
+              for (const k of pendingKeys) {
+                const pending = await persist.getItem(k);
+                // Si aún no fue enlazada a un ID oficial
+                if (pending && !pending.msgIdLinked) {
+                  // Calcular qué tan reciente es esta encuesta (creada por ejecutarEnvioEncuesta)
+                  const diffToNow = Math.abs(Date.now() - pending.createdAt);
+                  
+                  // Si se creó hace menos de 60 segundos, es candidata
+                  if (diffToNow < 60000 && diffToNow < bestDiff) {
+                    bestDiff = diffToNow;
+                    bestMatch = { key: k, data: pending };
+                  }
+                }
+              }
+
+              if (bestMatch) {
+                // Enlazamos el ID oficial
+                await persist.setItem(`poll:${msgId}`, bestMatch.data);
+                
+                // Marcamos la pendiente como enlazada para no volver a agarrarla si se envían 2 seguidas
+                bestMatch.data.msgIdLinked = true;
+                await persist.setItem(bestMatch.key, bestMatch.data);
+                
+                logger.info(`[ENCUESTA] 🔗 Encuesta enlazada exitosamente por heurística de tiempo (diff: ${bestDiff}ms). msgId: ${msgId} -> ${bestMatch.key}`);
+              } else {
+                console.log(`[WEBHOOK] No se encontró ninguna encuesta pendiente reciente para enlazar al msgId: ${msgId}`);
               }
             }
           }
