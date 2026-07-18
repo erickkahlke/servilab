@@ -622,8 +622,11 @@ async function inicializarEncuestasDiferidas() {
 
 // Funcion para analizar encuestas
 async function analizarEncuesta(vote) {
-  const voter = vote.voter; // JID del cliente
-  const opcion = vote.selectedOptions?.[0]?.name || "—";
+  // WaAPI cambió su payload: voter ahora puede ser sender
+  const voter = vote.voter || vote.sender; 
+  
+  // selectedOptions puede ser un array de objetos {name: "..."} o un array de strings ["..."]
+  const opcion = vote.selectedOptions?.[0]?.name || vote.selectedOptions?.[0] || "—";
   
   // Extraer messageId probando diferentes rutas debido a cambios en la API de WhatsApp
   const messageId = 
@@ -631,10 +634,15 @@ async function analizarEncuesta(vote) {
     vote.pollCreationMessageId || 
     vote.msgId || 
     vote.pollCreationMessage?.id ||
-    vote.id?.id;
+    vote.id?.id ||
+    vote.pollId; // WaAPI ahora usa pollId
 
   if (!messageId) {
     console.error("❌ No se pudo extraer el messageId del voto. Payload de WaAPI:", JSON.stringify(vote, null, 2));
+  }
+  
+  if (!voter) {
+    console.error("❌ No se pudo extraer el JID (voter/sender) del voto. Payload:", JSON.stringify(vote, null, 2));
   }
 
   const llaveDone = `done:${messageId}:${voter}`; // p/ idempotencia
