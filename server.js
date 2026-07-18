@@ -1572,7 +1572,25 @@ app.post(
     try {
       if (event === 'vote_update' && data?.vote) {
         await analizarEncuesta(data.vote);
+      } else if ((event === 'message' || event === 'message_create') && data?.message) {
+        const msg = data.message;
+        // Detectar si nosotros enviamos una encuesta
+        if (msg.fromMe && msg.type === 'poll_creation') {
+          const chatId = msg.to || msg.id?.remote;
+          const msgId = msg.id?.id;
+          
+          if (chatId && msgId) {
+            // Buscar si tenemos una encuesta pendiente para este número
+            const pending = await persist.getItem(`pending_poll:${chatId}`);
+            if (pending) {
+              // Vincular el ID oficial de WhatsApp con nuestra encuesta pendiente
+              await persist.setItem(`poll:${msgId}`, pending);
+              logger.info(`[ENCUESTA] 🔗 Encuesta vinculada con el ID oficial de WhatsApp asíncronamente. chatId: ${chatId} -> messageId: ${msgId}`);
+            }
+          }
+        }
       }
+      
       // otros eventos por ahora se ignoran
       res.json({ ok: true });
     } catch (err) {
