@@ -1587,14 +1587,20 @@ app.post(
         } else {
           console.error(`❌ [WEBHOOK] Evento vote_update recibido pero no tiene el objeto 'data.vote' adentro.`);
         }
-      } else if ((event === 'message' || event === 'message_create') && data?.message) {
-        const msg = data.message;
-        // Detectar si nosotros enviamos una encuesta
-        if (msg.fromMe && msg.type === 'poll_creation') {
-          const chatId = msg.to || msg.id?.remote;
-          const msgId = msg.id?.id;
-          
-          if (chatId && msgId) {
+      } else if (event === 'message' || event === 'message_create') {
+        console.log(`✉️ [WEBHOOK] Procesando ${event}. Payload completo:`, JSON.stringify(data, null, 2));
+        
+        // El objeto de mensaje puede venir dentro de data.message o ser data directamente
+        const msg = data?.message || data;
+        
+        if (msg) {
+          console.log(`[WEBHOOK] Analizando mensaje saliente: fromMe=${msg.fromMe}, type=${msg.type}`);
+          // Detectar si nosotros enviamos una encuesta
+          if (msg.fromMe && msg.type === 'poll_creation') {
+            const chatId = msg.to || msg.id?.remote;
+            const msgId = msg.id?.id;
+            
+            if (chatId && msgId) {
             // Buscar si tenemos una encuesta pendiente para este número
             const pending = await persist.getItem(`pending_poll:${chatId}`);
             if (pending) {
