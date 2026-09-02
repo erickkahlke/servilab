@@ -398,6 +398,51 @@ const enviarMensajeWhatsApp = async (chatId, message, retryCount = 0, requestId 
 };
 
 const SHEETS_URL = process.env.SHEETS_URL;
+const NPS_WEBHOOK_URL = process.env.SERVILAB_NPS_WEBHOOK_URL || 'https://servilab.ar/api/webhooks/apibox/nps';
+const NPS_API_KEY = process.env.SERVILAB_NPS_API_KEY;
+
+function reservaIdValido(reservaId) {
+  if (reservaId === undefined || reservaId === null) return false;
+  if (typeof reservaId === 'string') return reservaId.trim() !== '';
+  if (typeof reservaId === 'number') return Number.isFinite(reservaId);
+  return false;
+}
+
+async function enviarFeedbackNPS({ reservaId, score, telefono, feedback }) {
+  if (!reservaIdValido(reservaId)) {
+    throw new Error('Falta reserva_id para enviar el feedback NPS');
+  }
+  if (typeof score !== 'number' || score < 1 || score > 5) {
+    throw new Error(`Score NPS inválido: ${score}`);
+  }
+
+  const payload = {
+    reserva_id: reservaId,
+    score,
+  };
+
+  if (telefono) {
+    payload.telefono = String(telefono).replace(/^\+/, '');
+  }
+  if (feedback) {
+    payload.feedback = feedback;
+  }
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (NPS_API_KEY) {
+    headers['X-API-Key'] = NPS_API_KEY;
+  }
+
+  logger.info(`[NPS] Enviando feedback a ServiLab | reserva_id=${reservaId} | score=${score} | url=${NPS_WEBHOOK_URL}`);
+
+  const resp = await axios.post(NPS_WEBHOOK_URL, payload, {
+    headers,
+    timeout: 15000,
+  });
+
+  logger.info(`[NPS] ✅ Feedback aceptado | reserva_id=${reservaId} | nps_id=${resp.data?.nps_id || 'n/a'} | status=${resp.data?.status || resp.status}`);
+  return resp.data;
+}
 
 // Registro en memoria de temporizadores de alertas de disconformidad activos
 const activeAlertTimeouts = {};
@@ -499,7 +544,7 @@ async function inicializarAlertasPendientes() {
 
 // Helper unificado para el envío físico de la encuesta por WaAPI
 async function ejecutarEnvioEncuesta(datosPoll) {
-  const { telefono, nombre, apellido, lavado, appointment_start_date, appointment_start_time } = datosPoll;
+  const { telefono, nombre, apellido, lavado, appointment_start_date, appointment_start_time, reserva_id } = datosPoll;
   const telNorm = normalizarTelefono(telefono);
   const chatId = `${telNorm.replace("+", "")}@c.us`;
 
@@ -542,6 +587,7 @@ async function ejecutarEnvioEncuesta(datosPoll) {
     fecha: appointment_start_date,
     hora: appointment_start_time,
     telefono: telNorm,
+    reserva_id,
     createdAt: Date.now(),
   };
 
@@ -679,7 +725,21 @@ async function analizarEncuesta(vote) {
     }
   }
 
-  // ── Grabar/Actualizar en Google Sheets ─────────────────────────────
+  const score = obtenerValorNumerico(opcion);
+
+  // ── Enviar feedback NPS a ServiLab ─────────────────────────────
+  try {
+    await enviarFeedbackNPS({
+      reservaId: poll.reserva_id,
+      score,
+      telefono: poll.telefono,
+    });
+  } catch (err) {
+    const detalle = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error("⚠️  Error enviando feedback NPS a ServiLab. Se continúa el flujo local:", detalle);
+  }
+
+  // ── Grabar/Actualizar en Google Sheets (histórico / dashboard interno) ─
   try {
     await axios.post(
       SHEETS_URL,
@@ -690,14 +750,13 @@ async function analizarEncuesta(vote) {
         fecha: poll.fecha,
         hora: poll.hora,
         calificacion: opcion,
-        messageId: messageId, // Enviamos el messageId único para identificar la fila
+        messageId: messageId,
+        reserva_id: poll.reserva_id,
       },
       { headers: { "Content-Type": "application/json" } }
     );
   } catch (err) {
     console.error("⚠️  Error subiendo a Sheets. Se guardará localmente pero la planilla falló:", err.message);
-    // IMPORTANTE: Ya no hacemos 'return;' aquí para que el bot no se quede mudo. 
-    // El flujo continuará y el cliente recibirá su respuesta.
   }
 
   // ── Persistencia y Limpieza de Pendientes ─────────────────────────
@@ -1450,6 +1509,7 @@ app.post("/enviar-encuesta", async (req, res) => {
     lavado,
     appointment_start_date,
     appointment_start_time,
+    reserva_id,
     delay
   } = req.body;
 
@@ -1459,12 +1519,13 @@ app.post("/enviar-encuesta", async (req, res) => {
     !nombre ||
     !lavado ||
     !appointment_start_date ||
-    !appointment_start_time
+    !appointment_start_time ||
+    !reservaIdValido(reserva_id)
   ) {
     logError400(req, 'Faltan datos requeridos para enviar encuesta', req.body);
     return res
       .status(400)
-      .json({ success: false, message: "Faltan datos requeridos" });
+      .json({ success: false, message: "Faltan datos requeridos. Se requiere reserva_id." });
   }
 
   const delayMinutes = parseInt(delay, 10);
@@ -1474,7 +1535,8 @@ app.post("/enviar-encuesta", async (req, res) => {
     apellido,
     lavado,
     appointment_start_date,
-    appointment_start_time
+    appointment_start_time,
+    reserva_id
   };
 
   try {
@@ -2320,6 +2382,7 @@ app.delete('/dev/delete-key/:apiKey', async (req, res) => {
  *         - lavado
  *         - fecha
  *         - hora
+ *         - reserva_id
  *       properties:
  *         telefono:
  *           type: string
@@ -2345,6 +2408,12 @@ app.delete('/dev/delete-key/:apiKey', async (req, res) => {
  *           type: string
  *           example: '14:30'
  *           description: Hora del lavado en formato HH:mm
+ *         reserva_id:
+ *           oneOf:
+ *             - type: integer
+ *             - type: string
+ *           example: 1042
+ *           description: ID de la reserva/turno en ServiLab (appointment_number)
  *
  *     Success:
  *       type: object

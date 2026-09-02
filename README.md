@@ -48,6 +48,8 @@ PORT=3000
 WAAPI_TOKEN=tu_token_aqui
 WAAPI_INSTANCE_ID=tu_instance_id
 SHEETS_URL=tu_url_de_google_sheets
+SERVILAB_NPS_WEBHOOK_URL=https://servilab.ar/api/webhooks/apibox/nps
+SERVILAB_NPS_API_KEY=tu_api_key_servilab
 MASTER_API_KEY=sl_master_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx_admin
 ```
 
@@ -70,6 +72,8 @@ npm run dev
 | WAAPI_TOKEN | Token de autenticación de WaAPI | Sí |
 | WAAPI_INSTANCE_ID | ID de instancia de WaAPI | Sí |
 | SHEETS_URL | URL del endpoint de Google Sheets | Sí |
+| SERVILAB_NPS_WEBHOOK_URL | URL del webhook NPS en ServiLab | No (default: `https://servilab.ar/api/webhooks/apibox/nps`) |
+| SERVILAB_NPS_API_KEY | API key para autenticar el webhook NPS (`X-API-Key`) | No |
 | MASTER_API_KEY | API key maestra para gestión de otras keys | Sí |
 
 ## 📱 Endpoints
@@ -158,14 +162,15 @@ export MASTER_API_KEY="tu_master_key"
 
 ## 📊 Encuestas
 
-El sistema de encuestas utiliza WaAPI para enviar encuestas de satisfacción y procesar respuestas. Los resultados se almacenan en Google Sheets.
+El sistema de encuestas utiliza WaAPI para enviar encuestas de satisfacción y procesar respuestas. El voto se asocia a la reserva mediante `reserva_id` y se envía a ServiLab (`POST /api/webhooks/apibox/nps`) con `score` 1–5. También se registra en Google Sheets para el dashboard interno.
 
 ### Flujo de Encuesta
-1. Se envía la encuesta post-lavado
+1. Se envía la encuesta post-lavado incluyendo `reserva_id`
 2. Cliente responde
-3. Se procesa la respuesta vía webhook
-4. Se almacena en Google Sheets
-5. Se envía agradecimiento al cliente
+3. Se procesa la respuesta vía webhook de WaAPI
+4. Se envía el feedback NPS a ServiLab (`reserva_id`, `score`, `telefono`)
+5. Se almacena una copia en Google Sheets
+6. Se envía agradecimiento al cliente
 
 ## 🛠️ Desarrollo
 

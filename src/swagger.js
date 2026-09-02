@@ -126,7 +126,7 @@ const options = {
         },
         Encuesta: {
           type: 'object',
-          required: ['telefono', 'nombre', 'lavado', 'appointment_start_date', 'appointment_start_time'],
+          required: ['telefono', 'nombre', 'lavado', 'appointment_start_date', 'appointment_start_time', 'reserva_id'],
           properties: {
             telefono: {
               type: 'string',
@@ -158,6 +158,13 @@ const options = {
               type: 'string',
               example: '15:30',
               description: 'Hora del turno (HH:mm)'
+            },
+            reserva_id: {
+              oneOf: [
+                { type: 'integer', example: 1042 },
+                { type: 'string', example: '1042' }
+              ],
+              description: 'ID de la reserva/turno en ServiLab (appointment_number). Se usa para mapear el voto NPS.'
             }
           }
         },
