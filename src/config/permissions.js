@@ -9,7 +9,8 @@ const PERMISSIONS = {
             '/notificacion/pin-llaves',
             '/notificacion/recordatorio',
             '/notificacion/lavado-completado',
-            '/notificacion/grupo-interno'
+            '/notificacion/grupo-interno',
+            '/notificacion/mensaje'
         ]
     },
     'notifications:all': {

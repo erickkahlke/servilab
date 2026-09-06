@@ -102,6 +102,15 @@ Envía información del seguro de lluvia.
 }
 ```
 
+#### POST /notificacion/mensaje
+Envía un mensaje de texto libre por WhatsApp.
+```json
+{
+  "telefono": "1135784301",
+  "mensaje": "Hola, te escribimos desde ServiLab."
+}
+```
+
 [Ver documentación completa de endpoints en /docs/swagger]
 
 ## 🔐 Autenticación

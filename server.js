@@ -33,6 +33,9 @@ const logger = {
   warn: (message, ...args) => console.warn(`[WARN] ${message}`, ...args)
 };
 
+// ID del grupo WhatsApp corporativo (reportes de encuestas y alertas internas)
+const GRUPO_INTERNO_JID = process.env.GRUPO_INTERNO_JID || "120363206309706318@g.us";
+
 // Función helper para generar ID único de request
 const generarRequestId = () => {
   return `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -167,7 +170,8 @@ app.get("/test", (req, res) => {
       "/notificacion/pin-llaves",
       "/notificacion/recordatorio",
       "/notificacion/lavado-completado",
-      "/notificacion/grupo-interno"
+      "/notificacion/grupo-interno",
+      "/notificacion/mensaje"
     ],
     encuestas: [
       "/enviar-encuesta",
@@ -520,7 +524,7 @@ async function inicializarAlertasPendientes() {
                   logger.info(`[ALERTA] Enviando alerta de cliente disconforme (post-reinicio) al grupo interno para el cliente ${cliente}`);
 
                   await enviarMensajeWhatsApp(
-                    "120363206309706318@g.us",
+                    GRUPO_INTERNO_JID,
                     mensajeAlerta,
                     0,
                     `alert-${Date.now()}`
@@ -821,7 +825,7 @@ async function analizarEncuesta(vote) {
         logger.info(`[ALERTA] Enviando alerta de cliente disconforme al grupo interno para el cliente ${cliente}`);
 
         await enviarMensajeWhatsApp(
-          "120363206309706318@g.us",
+          GRUPO_INTERNO_JID,
           mensajeAlerta,
           0,
           `alert-${Date.now()}`
@@ -1440,7 +1444,7 @@ app.post("/notificacion/grupo-interno", async (req, res) => {
     });
   }
 
-  const grupoJid = "120363206309706318@g.us";
+  const grupoJid = GRUPO_INTERNO_JID;
 
   try {
     logger.info(`[${requestId}] Procesando envío a grupo interno | JID: ${grupoJid}`);
@@ -1465,6 +1469,95 @@ app.post("/notificacion/grupo-interno", async (req, res) => {
       message: "Error al enviar el mensaje de WhatsApp al grupo interno",
       error: error.message
     });
+  }
+});
+
+/**
+ * @swagger
+ * /notificacion/mensaje:
+ *   post:
+ *     summary: Envía un mensaje de texto libre a un destinatario por WhatsApp
+ *     description: Recibe el teléfono del destinatario y el texto a enviar. Requiere una API Key con permisos de notificaciones.
+ *     tags: [Notificaciones]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/MensajeLibre'
+ *     responses:
+ *       200:
+ *         description: Mensaje enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: API key inválida
+ *       500:
+ *         description: Error del servidor
+ */
+app.post("/notificacion/mensaje", async (req, res) => {
+  const requestId = generarRequestId();
+  const requestInfo = obtenerInfoRequest(req);
+  const timestamp = new Date().toISOString();
+
+  logger.info(`[${requestId}] 📥 REQUEST RECIBIDO | endpoint: /notificacion/mensaje | IP: ${requestInfo.ip} | timestamp: ${timestamp}`);
+  logger.info(`[${requestId}] Request details: ${JSON.stringify(requestInfo.headers)}`);
+  logger.info(`[${requestId}] Body recibido: ${JSON.stringify(req.body)}`);
+
+  const { telefono } = req.body;
+  const mensaje = req.body.mensaje || req.body.message;
+
+  if (!telefono) {
+    logger.warn(`[${requestId}] ⚠️ Validación fallida: Falta teléfono`);
+    logError400(req, 'Falta teléfono para mensaje libre', req.body);
+    return res.status(400).json({
+      success: false,
+      message: "El campo 'telefono' es requerido"
+    });
+  }
+
+  if (!mensaje || typeof mensaje !== 'string' || mensaje.trim() === '') {
+    logger.warn(`[${requestId}] ⚠️ Validación fallida: Mensaje inválido o vacío`);
+    logError400(req, 'Mensaje inválido o vacío para mensaje libre', req.body);
+    return res.status(400).json({
+      success: false,
+      message: "El campo 'mensaje' es requerido y no puede estar vacío"
+    });
+  }
+
+  try {
+    const telefonoNormalizado = normalizarTelefono(telefono);
+    const chatId = `${telefonoNormalizado.replace("+", "")}@c.us`;
+    const texto = mensaje.trim();
+
+    logger.info(`[${requestId}] Procesando envío | telefono: ${telefono} → normalizado: ${telefonoNormalizado} → chatId: ${chatId}`);
+
+    const result = await enviarMensajeWhatsApp(chatId, texto, 0, requestId);
+
+    if (result.duplicate) {
+      logger.warn(`[${requestId}] ⚠️ Mensaje duplicado detectado, pero se procesó correctamente`);
+    }
+
+    logMensajeEnviado("Mensaje libre", chatId, "Destinatario", telefonoNormalizado);
+    logger.info(`[${requestId}] ✅ REQUEST COMPLETADO EXITOSAMENTE | chatId: ${chatId}`);
+
+    res.status(200).json({
+      success: true,
+      message: "Mensaje enviado exitosamente"
+    });
+  } catch (error) {
+    logger.error(`[${requestId}] ❌ ERROR EN REQUEST | error: ${error.message} | stack: ${error.stack}`);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -2122,7 +2215,7 @@ cron.schedule('30 13 * * *', async () => {
     mensajeReporte += `🤖 Mensaje enviado automaticamente`;
 
     // 4. Enviar reporte al grupo interno corporativo
-    const grupoJid = "120363206309706318@g.us";
+    const grupoJid = GRUPO_INTERNO_JID;
     logger.info(`[CRON] Enviando reporte diario al grupo corporativo...`);
 
     await enviarMensajeWhatsApp(

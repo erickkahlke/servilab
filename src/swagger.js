@@ -103,6 +103,33 @@ const options = {
             }
           }
         },
+        MensajeLibre: {
+          type: 'object',
+          required: ['telefono', 'mensaje'],
+          properties: {
+            telefono: {
+              type: 'string',
+              example: '1135784301',
+              description: 'Número de teléfono del destinatario (con o sin prefijo internacional)'
+            },
+            mensaje: {
+              type: 'string',
+              example: 'Hola, te escribimos desde ServiLab.',
+              description: 'Texto libre a enviar por WhatsApp (también acepta el campo message)'
+            }
+          }
+        },
+        MensajeGrupoInterno: {
+          type: 'object',
+          required: ['mensaje'],
+          properties: {
+            mensaje: {
+              type: 'string',
+              example: '🚨 Comunicado interno: Se actualizó el procedimiento de entrega.',
+              description: 'Contenido del mensaje de texto libre a enviar al grupo corporativo (también acepta el campo message)'
+            }
+          }
+        },
         PinLlaves: {
           type: 'object',
           required: ['telefono', 'customer_first_name', 'codigo'],
